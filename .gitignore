@@ -1,3 +1,6 @@
+# Directories
+useful_shortcuts/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
