@@ -16,6 +16,7 @@ if __name__ == "__main__":
 
     with wandb.init(**cfg.get_logging_info()):
 
+#%%
         model = Model()
         model.to(cfg.device)
 
@@ -39,6 +40,7 @@ if __name__ == "__main__":
 
         scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, patience=cfg.hyper_params["training"]["patience_reduce_lr"])
 
+#%%
         model = train_loop( model,
                             cfg,
                             training_loader=dataset_base_train,
@@ -47,6 +49,7 @@ if __name__ == "__main__":
                             scheduler=scheduler_base,
                             device=device)
 
+#%%
             # Evaluation also on base test dataset
             metrics_test = Evaluate(
                 model, 
@@ -61,3 +64,7 @@ if __name__ == "__main__":
             with open(os.path.join(config['training']['save_training_info_dir'], 
                                    config['training']['base_stats_save_name']), 'wb') as f:
                 pickle.dump(metrics_test, f)
+
+            # FIXME: 
+
+            
