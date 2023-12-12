@@ -1,2 +1,6 @@
 pyyaml
 pydantic
+wandb
+torch
+gmshpaser
+meshio
