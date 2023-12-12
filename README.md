@@ -1,4 +1,4 @@
-# StandardProject
+# Thesis
 
 ## Setup the virtual environment with base dependencies
 
