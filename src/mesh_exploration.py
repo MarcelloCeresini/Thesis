@@ -1,37 +1,20 @@
-#%%
 import os
 from typing import Literal, Optional
 
 import meshio
 import pyvista
-from sympy import Union
 import toughio
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.spatial import Delaunay
 from icecream import ic
+import torch
+from torch_geometric.data import Data
+import pandas as pd
 
 from config_pckg.config_file import Config
 # from submodules import pymesh
-
-def read_mesh(filename, mode:Literal["meshio", "pyvista", "toughio"], plot=True):
-    '''Reads mesh given mode'''
-    # mesh = meshio.read(filename)
-    match mode:
-        case "meshio":
-            return meshio.ansys.read(filename)
-        case "pyvista":
-            # Useful to plot the mesh but not useful for mesh manipulation
-            # See: https://docs.pyvista.org/version/stable/api/core/_autosummary/pyvista.UnstructuredGrid.html#pyvista.UnstructuredGrid
-            mesh = pyvista.read(filename)
-            if plot:
-                mesh.plot()
-            return mesh
-        case "toughio":
-            # Parent classes to meshio Mesh type with (it seems) useful utilities
-            # https://toughio.readthedocs.io/en/latest/mesh.html
-            return toughio.read_mesh(filename)
-
+import utils
 
 def get_mesh_component(mesh, mesh_component_idx):
     '''Returns a new mesh with only one of the "cells" components of the old mesh'''
@@ -183,58 +166,53 @@ def get_intersection_two_compontents(intersections_matrix, n1: int, n2: int):
 #     return np.array(list_pts)
 
 
-
-def get_edges_from_face(idxs):
-    '''Returns bidirectional edges between vertices of lines, triangles and quads'''
-    if (sh := idxs.shape[0]) == 2: # line
-        return np.stack([
-            idxs, np.flip(idxs)
-        ])
-    elif sh == 3 or sh == 4: # traingle or quad
-        idxs = np.concatenate([idxs, [idxs[0]]])
-        pairs = np.lib.stride_tricks.sliding_window_view(idxs, 2)
-        return np.concatenate([pairs, np.flip(pairs)])
-    else:
-        raise NotImplementedError("Get simpler connections before through thoughio.get_connections()")
-
-
-def get_edges_from_component(cellblock):
-    return np.concatenate(list(map(get_edges_from_face, cellblock.data)))
-
-def get_all_edges(mesh):
-    return np.concatenate(list(map(get_edges_from_component, mesh.cells)))
-
-
 conf = Config()
-filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "2dtc_001R001_001_s01.msh") # 2D, binary
-# filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "profilo_end.msh") # 3D, ascii (broken for now)
+mesh_filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "2dtc_001R001_001_s01.msh") # 2D mesh, binary
+features_filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "2dtc_001R001_001_s01_nodal_values.csv")
+# filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "profilo_end.msh") # 3D mesh, ascii (broken for now)
 
-mesh = read_mesh(filename, mode="meshio")
+mesh = utils.read_mesh(mesh_filename, mode="meshio")
+features = pd.read_csv(features_filename)
 
-###### To visualize interesting things about the mesh
+map_mesh_to_feature = utils.match_mesh_and_feature_pts(mesh, features)
 
+###### To visualize compontents of the mesh
 # visualize_mesh_component(mesh, 1, read_from_file=False)
 # subplot_mesh_components(mesh)
-# free_idxs = get_free_points(mesh)
 
+###### To visualize points that are in mesh.points but not inside cellblocks (so, without connectivity)
+# free_idxs = get_free_points(mesh)
+# plot_pts(mesh.points[free_idxs])
+
+##### To visualize borders between components
 # idxs_in_components = get_idxs_in_compontents(mesh)
 # idxs_intersection = get_intersection_two_compontents(get_intersection_matrix_components(idxs_in_components), 0, 1)
-
 # pts = mesh.points[idxs_intersection]
 # plot_pts(pts)
 
+##### Specific to the example "2dtc_001R001_001_s01" --> one component is fully inside the 
+##### intersection between the two components in the mesh EXCEPT the four points in the extreme outer vertices
 # outer_component = idxs_in_components[0]
 # difference = outer_component.difference(idxs_intersection)
 # plot_pts(mesh.points[list(difference)])
 
-edges = get_all_edges(mesh)
-print(mesh)
 
 
-import torch
-from torch_geometric.data import Data
+##### Investigate feature "boundary-normal-dist"
+# ic(features.shape)
+# boundaries = features[features["boundary-normal-dist"]==0]
+# ic(boundaries.shape)
+# non_boundaries = features[features["boundary-normal-dist"]!=0]
+# plot_pts(features[["    x-coordinate", "    y-coordinate"]].iloc[boundaries.index].to_numpy())
 
-data = Data(edge_index=torch.tensor(edges).t().contiguous(), 
+features_to_remove = ['nodenumber', '    x-coordinate', '    y-coordinate', 'boundary-normal-dist']
+mesh_features = features[features.columns.difference(features_to_remove)].iloc[map_mesh_to_feature]
+
+##### To get full graph node-node connectivity
+edges = utils.get_all_edges(mesh)
+
+data = Data(x=torch.tensor(mesh_features.to_numpy()),
+            edge_index=torch.tensor(edges).t().contiguous(), 
             pos=torch.tensor(mesh.points))
 
 print(data)
