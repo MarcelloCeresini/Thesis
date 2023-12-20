@@ -36,6 +36,61 @@ class Config():
             log_graph=False
         )
 
+        self.epsilon_for_point_matching = 1e-5
+        self.mesh_to_features_scale_factor = 1e-3
+
+        self.active_vectors_2d = ['      x-velocity', '      y-velocity']
+        self.features_to_remove = ['nodenumber', 'boundary-normal-dist']
+        self.features_coordinates = ['    x-coordinate', '    y-coordinate']
+
+        self.bc_dict = {
+            2:	"interior",
+            3:	"wall",
+            4:	"pressure-inlet, inlet-vent, intake-fan",
+            5:	"pressure-outlet, exhaust-fan, outlet-vent",
+            7:	"symmetry",
+            8:	"periodic-shadow",
+            9:	"pressure-far-field",
+            10:	"velocity-inlet",
+            12:	"periodic",
+            14:	"fan, porous-jump, radiator",
+            20:	"mass-flow-inlet",
+            24:	"interface",
+            31:	"parent (hanging node)",
+            36:	"outflow",
+            37:	"axis",
+        }
+
+        self.cell_type_dict = {
+            '1': "triangle", # triangular
+            '2': "tetrahedral",
+            '3': "quad", # quadrilateral
+        }
+
+        self.edge_type_feature={
+            "cell_cell": 1,
+            "face_face": 2,
+            "cell_face": 3,
+        }
+
+        self.air_speed = 50 # m/s
+        self.atmosferic_pressure = 1.01325e5 # Pa
+
+        self.graph_node_feature_dict = {
+            "tangent_versor_x": 0,  # x-component of versor tangent to the face
+            "tangent_versor_y": 1,  # y......
+            "v_t": 2,               # velocity along the tangent versor
+            "v_n": 3,               # velocity along the perpendicular versor
+            "p": 4,                 # pressure on the face
+            "dt_v_t": 5,            # derivative along the tangent versor of v_t
+            "dt_v_n": 6,            # ...
+            "dt_p": 7,              # ...
+            "dn_v_t": 8,            # ...
+            "dn_v_n": 9,            # ...
+            "dn_p": 10,             # ...
+            "component_id": 11,     # Maybe useful?
+        }
+
 
     def get_wandb_logging_info(self) -> Dict:
         '''

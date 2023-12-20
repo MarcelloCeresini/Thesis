@@ -1,5 +1,6 @@
 import os
 from typing import Literal, Optional
+import itertools
 
 import meshio
 import pyvista
@@ -11,27 +12,34 @@ from icecream import ic
 import torch
 from torch_geometric.data import Data
 import pandas as pd
+from circle_fit import hyperLSQ
 
 from config_pckg.config_file import Config
 
 
-def read_mesh(filename, mode:Literal["meshio", "pyvista", "toughio"], plot=True):
+def read_mesh(filename, mode: Literal["meshio", "pyvista", "toughio"], conf: Config, plot=True):
     '''Reads mesh given mode'''
     # mesh = meshio.read(filename)
     match mode:
         case "meshio":
-            return meshio.ansys.read(filename)
+            mesh = meshio.ansys.read(filename)
+            mesh.points *= conf.mesh_to_features_scale_factor
+            return mesh
         case "pyvista":
             # Useful to plot the mesh but not useful for mesh manipulation
             # See: https://docs.pyvista.org/version/stable/api/core/_autosummary/pyvista.UnstructuredGrid.html#pyvista.UnstructuredGrid
             mesh = pyvista.read(filename)
+            mesh.points *= conf.mesh_to_features_scale_factor
             if plot:
                 mesh.plot()
             return mesh
         case "toughio":
+            raise NotImplementedError("How to implement scaling points?")
             # Parent classes to meshio Mesh type with (it seems) useful utilities
             # https://toughio.readthedocs.io/en/latest/mesh.html
             return toughio.read_mesh(filename)
+        case _:
+            raise NotImplementedError('Only "meshio", "pyvista" and "toughio" are accepted values')
 
 
 def sort_matrix(matrix):
@@ -46,17 +54,18 @@ def sort_matrix(matrix):
         raise NotImplementedError
 
 
-def match_mesh_and_feature_pts(mesh, features, check_biunivocity=True):
-    eps = 1e-5
-    feature_to_mesh_scale = 1000
+def match_mesh_and_feature_pts(mesh, features, conf: Config, dim=2, check_biunivocity=True):
+    eps = conf.epsilon_for_point_matching
+
     map_mesh_to_feature = np.zeros([len(mesh.points), 2])
-    if mesh.points[0].shape[0] == 2:
-        mesh_m, mesh_old_idxs = sort_matrix(mesh.points)
+    if dim == 2:
+        pts = mesh.points[:,:2]
+        mesh_m, mesh_old_idxs = sort_matrix(pts)
         features_m, features_old_idxs = sort_matrix(features[["    x-coordinate", "    y-coordinate"]].to_numpy())
         
         mesh_abs = np.abs(mesh_m)
-        features_low_bound = np.abs(features_m*feature_to_mesh_scale*(1-eps))
-        features_high_bound = np.abs(features_m*feature_to_mesh_scale*(1+eps))
+        features_low_bound = np.abs(features_m*(1-eps))
+        features_high_bound = np.abs(features_m*(1+eps))
 
         for i, (mesh_old_idx, ft_old_idx, m_a, ft_lb, ft_hb) in enumerate(zip(mesh_old_idxs,
                                                                               features_old_idxs,
@@ -100,29 +109,287 @@ def get_edges_from_component(cellblock):
 
 
 def get_all_edges(mesh):
-    return np.concatenate(list(map(get_edges_from_component, mesh.cells)))
+    if isinstance(mesh, meshio.Mesh) or isinstance(mesh, toughio.Mesh):
+        return np.concatenate(list(map(get_edges_from_component, mesh.cells)))
+    elif isinstance(mesh, pyvista.UnstructuredGrid):
+        raise NotImplementedError("Didn't implement cell connectivity for pyvista yet")
 
 
-def convert_msh_csv_to_graph(filename_input_msh, filename_input_csv, filename_output_graph):
-    '''Given the ansys .msh file and the .csv feature file, saves in memory the complete graph from torch_geometric'''
+# def convert_msh_csv_to_graph(filename_input_msh, filename_input_csv, filename_output_graph, conf: Config):
+    # '''Given the ansys .msh file and the .csv feature file, saves in memory the complete graph from torch_geometric'''
+
+    # mesh = read_mesh(filename_input_msh, mode="meshio")
+    # features = pd.read_csv(filename_input_csv)
+
+    # map_mesh_to_feature = match_mesh_and_feature_pts(mesh, features, conf)
+
+    # reduced_features = features[features.columns.difference(conf.features_to_remove)]
+    # mesh_features = reduced_features[reduced_features.columns.difference(conf.features_coordinates)].iloc[map_mesh_to_feature]
+    # mesh_coords = reduced_features[conf.features_coordinates].iloc[map_mesh_to_feature]
+
+    # mesh_features = features[features.columns.difference(conf.features_to_remove)].iloc[map_mesh_to_feature]
+
+    # ##### To get full graph node-node connectivity
+    # edges = get_all_edges(mesh)
+
+    # data = Data(x=torch.tensor(mesh_features.to_numpy()),
+    #             edge_index=torch.tensor(edges).t().contiguous(), 
+    #             pos=torch.tensor(mesh.points))
+    
+    # torch.save(data, filename_output_graph)
+
+    # return data
+
+
+def make_cell(a):
+    cell = list(a[0,:])
+    for i in range(1,len(a)):
+        idx = np.argwhere(a[:,0]==cell[i])[0][0]
+        cell += [a[idx,1]]
+    assert cell[0] == cell[-1], "Something broken in reconstruction of cell"
+    return cell[:-1]
+
+
+def get_adjacency_list(mesh, idx_component):
+    return(mesh.info["elements"][mesh.info["zone_id_list_cellblocks"][idx_component]]["adj_data"])
+
+
+def recreate_cells(mesh: meshio.Mesh, conf:Config):
+    '''
+    Given a meshio.Mesh returns:
+    - cellblocks: dict [key, val]
+        - key: str --> accepted toughio.Mesh format for cell type
+        - value: list --> list of CELL vertices, all with the dimension stated in key
+    - cell_vertices_list: list --> same as above but the cells are ORDERED as stated in the .msh file, 
+        useful for final indexing of cells. Here, cells can have different dimensions
+    - cell_connectivity: np.array [n_edges, 2] where on the same row you have 2 indices of adjacent cells
+    '''
+
+    edge_list = np.concatenate([c.data for c in mesh.cells])
+    adjacency_list = np.concatenate([get_adjacency_list(mesh, i) for i in range(len(mesh.cells))])
+
+    # TODO: change the info structure of the parser to make it more robust: WAIT until more samples arrive to make it more general
+    cell_types_list = mesh.info["elements"][8]["cell_type_cumulative"]
+
+    unique_vals, unique_counts = np.unique(cell_types_list, return_counts=True)
+
+    # TODO: make it more robust for 3D
+    cellblocks = {
+        "triangle": [],
+        "quad":     [],
+    }
+    cell_vertices_list = []
+
+    for i, cell_type in enumerate(cell_types_list):
+
+        idxs_l = np.argwhere(adjacency_list[:,0]== i+1)[:,0]
+        tmp = [edge_list[j] for j in idxs_l]
+
+        idxs_r = np.argwhere(adjacency_list[:,1]== i+1)[:,0]
+        tmp += [np.flip(edge_list[j]) for j in idxs_r]
+
+        tmp = np.stack(tmp, axis=0)
+
+        cell = make_cell(tmp)
+        cellblocks[conf.cell_type_dict[cell_type]].append(cell) 
+        cell_vertices_list.append(cell)
+
+    for val, count in zip(unique_vals, unique_counts):
+        assert len(cellblocks[conf.cell_type_dict[val]]) == count, "Definition of cells in .msh doesn't correspond to reconstructed cells"
+
+    # We remove all the adjaceny pairs with a 0 in it because in .msh it means that a face doesn't have both sides adjacent to a cell
+    # Since we only care cell-cell adjacency, we discard it 
+    real_adjacency = adjacency_list[np.logical_and(adjacency_list[:,0] != 0, adjacency_list[:,1] != 0)]
+
+    # Bidirectional edges, create a flipped copy
+    cell_connectivity = np.concatenate([real_adjacency, np.flip(real_adjacency, axis=1)], axis=0)
+
+    # Sanity check, remove duplicates (there shouldn't be any)
+    cell_connectivity = np.unique(cell_connectivity, axis=0) 
+    
+    # Bring all connections in [0, n_cells-1] (instead now they were in [0, n_cells], where 0 meant "no_connection")
+    cell_connectivity -= 1
+
+    return cellblocks, cell_vertices_list, cell_connectivity
+
+
+def map_vertex_pair_to_face_idx(vertex_pair, vertices_in_faces):
+    tmp = np.nonzero(np.logical_and(vertices_in_faces[:,0] == vertex_pair[0], 
+                                    vertices_in_faces[:,1] == vertex_pair[1]))[0]
+    if len(tmp) == 1:
+        return tmp
+    else: # swap vertices
+        return np.nonzero(np.logical_and(vertices_in_faces[:,0] == vertex_pair[1], 
+                                         vertices_in_faces[:,1] == vertex_pair[0]))[0]
+
+
+def face_id_inside_faceblock_to_mesh_face_id(face_id_inside_faceblock, faceblock_id, len_faceblocks):
+    return face_id_inside_faceblock + np.sum(len_faceblocks[:faceblock_id+1])
+
+
+def get_cell_data(mesh: meshio.Mesh, conf: Config):
+    '''
+    Given a mesh returns:
+        - cell_center_positions: np.array with shape [n_cells, 3] (x,y,z)
+        - cell_center_cell_center_edges: np.array with shape [n_cell_cell_edges, 2], where both values inside a row are a index of cell_center_positions
+        - cell_node_components: np.array with shape [n_cells]
+    '''
+    dict_vertices_in_cells, vertices_in_cells, CcCc_edges_bidir = recreate_cells(mesh, conf)
+
+    # Create a mesh from cells instead than from faces
+    cell_mesh = toughio.Mesh(mesh.points, [(key, np.stack(val)) for key, val in dict_vertices_in_cells.items()])
+
+    return cell_mesh.centers, CcCc_edges_bidir, vertices_in_cells
+
+
+def get_face_data(face_mesh: meshio.Mesh, vertices_in_cells):
+
+    vertices_in_faces = np.concatenate([c.data for c in face_mesh.cells], axis=0) # face_list[face_idx] = [list_of_node_idxs_in_that_face]
+    tmp = set([frozenset([vertex_pair[0], vertex_pair[1]]) for vertex_pair in vertices_in_faces])
+    vertices_in_faces = np.stack([np.array(list(fset)) for fset in tmp])
+
+    face_mesh = toughio.Mesh(face_mesh.points, [("line",vertices_in_faces)])
+    face_center_positions = face_mesh.centers
+    
+    CcFc_edges = []
+    FcFc_edges = []
+    for i, vert_in_cell in enumerate(vertices_in_cells):
+        face_ids_in_cell = []
+        for vertex_pair in np.lib.stride_tricks.sliding_window_view(vert_in_cell+[vert_in_cell[0]], 2):
+            # vertex_pair = pair of nodes on an face
+            face_id = map_vertex_pair_to_face_idx(vertex_pair, vertices_in_faces)[0]
+            CcFc_edges.append([i, face_id])
+            face_ids_in_cell.append(face_id)
+        
+        # add edges between faces (face centers) of the same cell
+        FcFc_edges += list(itertools.combinations(face_ids_in_cell, 2))
+
+    CcFc_edges = np.stack(CcFc_edges)
+    FcFc_edges = np.stack(FcFc_edges)
+    
+    return face_center_positions, FcFc_edges, vertices_in_faces, CcFc_edges
+
+
+def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in_faces, conf: Config):
+    point_positions = mesh.points
+
+    # TODO: decide how to differenciate between fixed and free features
+    face_center_attr_BC = np.zeros((len(face_center_positions), len(conf.graph_node_feature_dict)))
+    face_center_attr_BC_mask = np.zeros((len(face_center_positions), len(conf.graph_node_feature_dict))).astype(bool)
+
+    face_spatial_dir = [point_positions[v[1]]-point_positions[v[0]] for v in vertices_in_faces]
+    face_spatial_dir_norm = np.array([vec/np.linalg.norm(vec) for vec in face_spatial_dir])
+    # face tangent versor components
+    face_center_attr_BC[:,:2] = face_spatial_dir_norm[:,:2]
+    face_center_attr_BC_mask[:,:2] = True
+
+    elem_info = mesh.info["elements"]
+    zone_id_bc_type = {elem: elem_info[elem]["bc_type"] if "bc_type" in elem_info[elem].keys() else -1 for elem in elem_info}
+    cellblock_idx_bc_type = [zone_id_bc_type[key] for key in mesh.info["zone_id_list_cellblocks"]]
+    cellblock_idx_name = [mesh.info["global"][str(key)]["zone_name"] if str(key) in mesh.info["global"].keys() else "" for key in mesh.info["zone_id_list_cellblocks"] ]
+
+    for i, tmp in enumerate(zip(mesh.cells, cellblock_idx_bc_type, cellblock_idx_name)):
+        faceblock, bc_type, name = tmp
+
+        faces_of_faceblock_idxs = [map_vertex_pair_to_face_idx(vertex_pair, vertices_in_faces)[0] for vertex_pair in faceblock.data]
+        points_of_faceblock_idxs = np.unique(np.concatenate([faceblock.data[:,0], faceblock.data[:,1]]))
+        points_of_faceblock_positions = point_positions[points_of_faceblock_idxs]
+
+        face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["component_id"]] = i
+        face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["component_id"]] = True
+                                                        
+        match bc_type:
+            case 2: # interior, no condition
+                pass
+            case 3: # wall, speed fixed depending on the name
+                if "ground" in name: # same tangential velocity as the air entering the domain
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
+                elif "tyre" in name: # in 2D, it rotates around the center with angular speed omega
+                    Cx, Cy, R, sigma = hyperLSQ(points_of_faceblock_positions[:,:2])
+                    omega = conf.air_speed / R
+                    v_t = np.linalg.norm(face_center_positions[faces_of_faceblock_idxs][:,:2]-[Cx, Cy], axis=1) * omega # v_t = omega * r
+                    # TODO: do we add a np.dot(v_t, face_spatial_dir_norm[:,:2]) to only get the component really tangent?
+                    
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = v_t
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
+                elif "w0" in name: # fixed wall, doesn't move
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
+                else:
+                    raise NotImplementedError(f"Didn't implement this kind of wall yet: {name}")
+            case 5: # pressure-outlet
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = conf.atmosferic_pressure
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = True
+            case 7: # simmetry, normal derivative = 0
+                # TODO: is this right? both v_t and v_n normal derivatives should be zero?
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dt_v_t"]] = 0
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dt_v_t"]] = True
+
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dt_v_n"]] = 0
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dt_v_n"]] = True
+            case 10: # velocity_inlet
+                # TODO: is this right? should v_normal be =0?
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
+
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = True
+            case _:
+                raise NotImplementedError("Didn't implement this kind of BC yet")
+            
+    return face_center_attr_BC, face_center_attr_BC_mask
+    
+
+def convert_msh_to_graph(filename_input_msh, filename_output_graph, conf:Config):
+    '''Given an ASCII .msh file from ANSA, returns a graph and saves it to memory'''
     conf = Config()
 
-    mesh = read_mesh(filename_input_msh, mode="meshio")
-    features = pd.read_csv(filename_input_csv)
+    mesh = read_mesh(filename_input_msh, mode="meshio", conf=conf, plot=False)
 
-    map_mesh_to_feature = match_mesh_and_feature_pts(mesh, features)
-
-    # TODO: insert this into Config()
-    features_to_remove = ['nodenumber', '    x-coordinate', '    y-coordinate', 'boundary-normal-dist']
-    mesh_features = features[features.columns.difference(features_to_remove)].iloc[map_mesh_to_feature]
-
-    ##### To get full graph node-node connectivity
-    edges = get_all_edges(mesh)
-
-    data = Data(x=torch.tensor(mesh_features.to_numpy()),
-                edge_index=torch.tensor(edges).t().contiguous(), 
-                pos=torch.tensor(mesh.points))
+    cell_center_positions, CcCc_edges_bidir, vertices_in_cells = get_cell_data(mesh, conf)
+    n_cells = len(cell_center_positions)
     
-    torch.save(data, filename_output_graph)
+    face_center_positions, FcFc_edges, vertices_in_faces, CcFc_edges = get_face_data(mesh, vertices_in_cells)
+    n_faces = len(face_center_positions)
+    
+    face_center_features, face_center_features_mask = get_face_BC_attributes(mesh, face_center_positions, vertices_in_faces, conf)
 
-    return data
+    graph_nodes_positions = np.concatenate([cell_center_positions, face_center_positions])
+
+    # shift face indices
+    FcFc_edges[:,:] += n_cells
+    CcFc_edges[:,1] += n_cells # first indices refer to cell centers and so do not need to be shifted
+
+    # Add graph_edge bidirectionality
+    FcFc_edges_bidir = np.concatenate([FcFc_edges, np.flip(FcFc_edges, axis=1)], axis=0)
+    CcFc_edges_bidir = np.concatenate([CcFc_edges, np.flip(CcFc_edges, axis=1)], axis=0)
+
+    graph_edges = np.concatenate([CcCc_edges_bidir, FcFc_edges_bidir, CcFc_edges_bidir])
+
+    graph_edge_attr = np.concatenate([np.ones((len(CcCc_edges_bidir), 1)) * conf.edge_type_feature["cell_cell"],
+                                      np.ones((len(FcFc_edges_bidir), 1)) * conf.edge_type_feature["face_face"],
+                                      np.ones((len(CcFc_edges_bidir), 1)) * conf.edge_type_feature["cell_face"]])
+
+    graph_node_attr = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)*2]), # features and mask
+                                        np.concatenate([face_center_features,
+                                                        face_center_features_mask], axis=1)])
+
+    # TODO: save to file
+
+    data = Data(
+        edge_index=torch.tensor(graph_edges).t().contiguous(), 
+        pos=torch.tensor(graph_nodes_positions),
+        edge_attr=torch.tensor(graph_edge_attr),
+        x=graph_node_attr,
+        y=None
+    )
+
+    data.n_cells = n_cells
+    data.n_faces = len(data.pos) - n_cells
+
+    data.n_cell_edges = len(CcCc_edges_bidir)
+    data.n_face_edges = len(FcFc_edges_bidir)
+    data.n_cell_face_edges = len(CcFc_edges_bidir)
+
+    torch.save(data, filename_output_graph)
