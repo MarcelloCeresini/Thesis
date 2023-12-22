@@ -466,10 +466,6 @@ cell_center_edges = cell_connectivity
 cell_center_to_node_correspondance = cell_vertices_list
 n_cells = len(cell_center_positions)
 
-# TODO: create edges between faces inside each cell ex: [[1, 2] --> [2, 3], [2, 3] --> [3, 1], [3, 1] --> [1, 2]]
-# TODO: create mapping between face_vertices and face_center_id ex: [1, 2] --> 0, [2, 3] --> 1 etc...
-# TODO: shift center idxs by len(faces) and stack all edges together
-# TODO: create edges between cell_center and its own face_centers
 
 ##### POINT INFO
 point_positions = toughio_mesh.points

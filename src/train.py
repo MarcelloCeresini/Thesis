@@ -61,15 +61,11 @@ def train(dataloader, writer: SummaryWriter(), conf: Config):
     for epoch in tqdm(range(conf.hyper_params["training"]["n_epochs"])):
         total_loss = 0
         model.train()
-        # TODO: DataLoader breaks graph structure?
         for batch in train_loader:
             opt.zero_grad()
             embedding, pred = model(batch)
-            # FIXME: why batch.y, batch.x etc return LISTS??
-            label = torch.tensor(batch.y[0], dtype=torch.float32)
-            label_mask = torch.tensor(batch.y_mask[0], dtype=torch.float32)
 
-            loss = model.loss(pred, label, label_mask)
+            loss = model.loss(pred, batch.y, batch.y_mask)
             loss.backward()
             opt.step()
             total_loss += loss.item() * batch.num_graphs
@@ -84,12 +80,10 @@ def train(dataloader, writer: SummaryWriter(), conf: Config):
     # test_loss = test(test_loader, model)
     # writer.add_scalar("test_loss", test_loss, epoch)
 
-    # TODO: add timestamp so that it doesn't overwrite the same metrics over and over
     # with open(os.path.join(config['training']['save_training_info_dir'], 
     #                         config['training']['base_stats_save_name']), 'wb') as f:
     #     pickle.dump(metrics_test, f)
 
-    # FIXME: 
         
     return model
 

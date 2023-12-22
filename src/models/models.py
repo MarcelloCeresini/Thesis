@@ -30,9 +30,6 @@ class GNNStack(nn.Module):
 
     def forward(self, data: pyg_data.Data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
-        # TODO: why is x a list?
-        # FIXME: surely it shouldn't work like this
-        x = torch.tensor(x[0], dtype=torch.float32)
         # if data.num_node_features == 0:
         #     x = torch.ones(data.num_nodes, 1)
 
@@ -49,7 +46,7 @@ class GNNStack(nn.Module):
     def loss(self, pred:torch.Tensor, label:torch.Tensor, mask:torch.Tensor =None):
         if mask is not None:
             loss = F.mse_loss(pred, label, reduction="none")
-            return (loss * mask.float()).mean()
+            return (loss * mask).mean()
         else:
             return F.mse_loss(pred, label, reduction="mean")
 

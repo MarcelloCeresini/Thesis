@@ -13,6 +13,7 @@ import torch
 from torch_geometric.data import Data
 import pandas as pd
 from circle_fit import hyperLSQ
+import torch
 
 from config_pckg.config_file import Config
 
@@ -436,20 +437,20 @@ def convert_msh_to_graph(filename_input_msh, conf:Config, filename_output_graph=
 
     data = Data(
         edge_index=torch.tensor(graph_edges).t().contiguous(), 
-        pos=torch.tensor(graph_nodes_positions),
-        edge_attr=torch.tensor(graph_edge_attr),
-        x=graph_node_attr,
+        pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
+        edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
+        x=torch.tensor(graph_node_attr, dtype=torch.float32),
         y=None
     )
 
-    data.x_mask = graph_node_attr_mask
+    data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
 
-    data.n_cells = n_cells
-    data.n_faces = n_faces
+    data.n_cells = torch.tensor(n_cells)
+    data.n_faces = torch.tensor(n_faces)
 
-    data.n_cell_edges = len(CcCc_edges_bidir)
-    data.n_face_edges = len(FcFc_edges_bidir)
-    data.n_cell_face_edges = len(CcFc_edges_bidir)
+    data.n_cell_edges = torch.tensor(len(CcCc_edges_bidir))
+    data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
+    data.n_cell_face_edges = torch.tensor(len(CcFc_edges_bidir))
 
     if labels_csv_filename:
         # TODO: is face_center right for the labels of the simulation?
@@ -462,11 +463,11 @@ def convert_msh_to_graph(filename_input_msh, conf:Config, filename_output_graph=
 
     face_label_dim = len(conf.features_to_keep)
     
-    data.y = np.concatenate([np.zeros([n_cells, face_label_dim]), 
-                             face_center_labels])
+    data.y = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
+                                          face_center_labels]), dtype=torch.float32)
     
-    data.y_mask = np.concatenate([np.zeros([n_cells, face_label_dim]), 
-                                  np.ones([n_faces, face_label_dim])])
+    data.y_mask = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
+                                               np.ones([n_faces, face_label_dim])]), dtype=torch.bool)
 
     if filename_output_graph:
         torch.save(data, filename_output_graph)

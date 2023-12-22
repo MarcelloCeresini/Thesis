@@ -4,4 +4,4 @@ training:
   n_epochs: 100
   patience_reduce_lr: 10
   n_epochs_val: 10
-  batch_size: 1
+  batch_size: 2
