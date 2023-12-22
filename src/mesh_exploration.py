@@ -2,6 +2,7 @@ import os
 from typing import Literal, Optional, Union
 from time import time
 import itertools
+import sys
 
 import meshio
 import pyvista
@@ -429,7 +430,17 @@ def map_vertex_pair_to_face_idx(vertex_pair, face_to_node_correspondance, face_i
 
 
 conf = Config()
-mesh_filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "2dtc_001R001_001_s01_ascii.msh") # 2D mesh, ASCII
+
+mesh_filename = os.path.join(conf.DATA_DIR, "raw", "2dtc_001R001_001_s01_ascii.msh") # 2D mesh, ASCII
+labels_filename = os.path.join(conf.DATA_DIR, "raw", "2dtc_001R001_001_s01_cell_values.csv")
+final_data_filename = os.path.join(conf.DATA_DIR, "interim", "2dtc_001R001_001_s01_ascii_W_LABELS.pt") 
+
+utils.convert_msh_to_graph(mesh_filename, conf,
+                           filename_output_graph=final_data_filename,
+                           labels_csv_filename=labels_filename)
+
+sys.exit()
+
 # mesh_filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "2dtc_001R001_001_s01.msh") # 2D mesh, binary
 features_filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "2dtc_001R001_001_s01_nodal_values.csv")
 # filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "profilo_end.msh") # 3D mesh, ascii (broken for now)

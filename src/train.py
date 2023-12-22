@@ -1,70 +1,96 @@
+from typing import Literal
+from tqdm import tqdm
+
+import torch
+import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
+import torch_geometric.data as pyg_data
 import wandb
 from torch.optim import Adam
 import torch.optim.lr_scheduler as lr_scheduler 
 
-from config_pckg.config_file import Config as Cfg
-from data_pipeline import get_data_loaders
+from config_pckg.config_file import Config 
+from models.models import GNNStack
 
 
-if __name__ == "__main__":
+def test(loader: pyg_data.DataLoader, model):
+    with torch.no_grad():
+        model.eval()
+        for batch in loader:
+            _, pred = model(batch)
+            label = batch.y
+            label_mask = batch.y_mask
 
-    cfg = Cfg()
+            loss = model.loss(pred, label, label_mask)
+            total_loss += loss.item() * batch.num_graphs
+        total_loss /= len(loader.dataset)
+        return total_loss
 
-    ROOT_DIR = cfg.ROOT_DIR
 
-    train_loader, val_loader, test_loader = get_data_loaders(cfg)
+def train(dataloader, writer: SummaryWriter(), conf: Config):
 
-    with wandb.init(**cfg.get_logging_info()):
+    # TODO: implement train/val/test splits
+    # train_loader, val_loader, test_loader = 
+    train_loader = dataloader
 
-#%%
-        model = Model()
-        model.to(cfg.device)
+    # with wandb.init(**conf.get_logging_info()):
 
-        wandb.watch(
-            model,
-            log=cfg.logging["model_log_mode"],
-            log_freq=cfg.logging["n_batches_freq"],
-            log_graph=cfg.logging["log_graph"]
-        )
+    # TODO: change the name "features_to_keep" to "labels_to_keep"
+    model = GNNStack(input_dim=len(conf.graph_node_feature_dict), 
+                     hidden_dim=20, 
+                     output_dim=len(conf.features_to_keep))
+    
+    model.to(conf.device)
 
-        optimizer = Adam(
-            params=[{
-                "params": None, # model.module1.parameters()
-                "lr": cfg.hyper_params["training"]["module1"]["lr"]
-            },{
-                "params": None, # model.module2.parameters()
-                "lr": cfg.hyper_params["training"]["module2"]["lr"]
-            },],
-            weight_decay=cfg.hyper_params["training"]["weight_decay"]
-        )
+    # wandb.watch(
+    #     model,
+    #     log=conf.logging["model_log_mode"],
+    #     log_freq=conf.logging["n_batches_freq"],
+    #     log_graph=conf.logging["log_graph"]
+    # )
 
-        scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, patience=cfg.hyper_params["training"]["patience_reduce_lr"])
+    opt = Adam(
+        params= model.parameters(), 
+        lr= conf.hyper_params["training"]["lr"],
+        weight_decay=conf.hyper_params["training"]["weight_decay"],
+    )
 
-#%%
-        model = train_loop( model,
-                            cfg,
-                            training_loader=dataset_base_train,
-                            validation_loader=dataset_base_val,
-                            optimizer=optimizer_base,
-                            scheduler=scheduler_base,
-                            device=device)
+    # TODO: implement schedules
+    scheduler = lr_scheduler.ReduceLROnPlateau(opt, patience=conf.hyper_params["training"]["patience_reduce_lr"])
 
-#%%
-            # Evaluation also on base test dataset
-            metrics_test = Evaluate(
-                model, 
-                dataset_base_test, 
-                prefix="test/",
-                device=device,
-                config=config,
-                confidence_threshold=config['eval']['threshold_classification_scores']
-            )(is_novel=False)
+    for epoch in tqdm(range(conf.hyper_params["training"]["n_epochs"])):
+        total_loss = 0
+        model.train()
+        # TODO: DataLoader breaks graph structure?
+        for batch in train_loader:
+            opt.zero_grad()
+            embedding, pred = model(batch)
+            # FIXME: why batch.y, batch.x etc return LISTS??
+            label = torch.tensor(batch.y[0], dtype=torch.float32)
+            label_mask = torch.tensor(batch.y_mask[0], dtype=torch.float32)
 
-            # TODO: add timestamp so that it doesn't overwrite the same metrics over and over
-            with open(os.path.join(config['training']['save_training_info_dir'], 
-                                   config['training']['base_stats_save_name']), 'wb') as f:
-                pickle.dump(metrics_test, f)
+            loss = model.loss(pred, label, label_mask)
+            loss.backward()
+            opt.step()
+            total_loss += loss.item() * batch.num_graphs
+        total_loss /= len(train_loader.dataset)
+        writer.add_scalar("loss", total_loss, epoch)
 
-            # FIXME: 
+    #     if epoch % conf.hyper_params["training"]["n_epochs_val"]:
+    #         val_loss = test(val_loader, model)
+    #         writer.add_scalar("val_loss", val_loss, epoch)
+
+    # test_metric = 0
+    # test_loss = test(test_loader, model)
+    # writer.add_scalar("test_loss", test_loss, epoch)
+
+    # TODO: add timestamp so that it doesn't overwrite the same metrics over and over
+    # with open(os.path.join(config['training']['save_training_info_dir'], 
+    #                         config['training']['base_stats_save_name']), 'wb') as f:
+    #     pickle.dump(metrics_test, f)
+
+    # FIXME: 
+        
+    return model
 
             

@@ -1,9 +1,21 @@
 import os
+from datetime import datetime
+
+import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
+import torch_geometric.data as pyg_data
 
 from config_pckg.config_file import Config
-from utils import convert_msh_to_graph
+from data_pipeline.data_loading import get_data_loaders
+from train import train
+
 
 conf = Config()
-mesh_filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "2dtc_001R001_001_s01_ascii.msh") # 2D mesh, ASCII
-graph_filename = os.path.join(conf.DATA_DIR, "initial_exploration", "interim", "2dtc_001R001_001_s01_ascii.pt") # 2D mesh, ASCII
-convert_msh_to_graph(mesh_filename, graph_filename, conf)
+
+writer = SummaryWriter("./log/" + datetime.now().strftime("%Y%m%d-%H%M%S"))
+
+dataloader = get_data_loaders(conf)
+
+model = train(dataloader, writer, conf)
+
+print("AAA")

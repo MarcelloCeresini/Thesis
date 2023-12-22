@@ -24,24 +24,44 @@ class Config():
             except yaml.YAMLError as exc:
                 print(exc)
 
+        
+
         match mode:
             case None:
                 pass
             case _:
                 raise NotImplementedError()
 
-        model_logging = ModelLogging(
-            model_log_mode= "all",
-            n_batches_freq=0,
-            log_graph=False
-        )
-
+        self.dim = 2
         self.epsilon_for_point_matching = 1e-5
         self.mesh_to_features_scale_factor = 1e-3
 
+        self.features_to_remove = [
+            'cellnumber',
+        ]
+
+        self.features_coordinates = [
+            'x-coordinate',
+            'y-coordinate',
+        ]
+
+        self.features_to_keep = [
+            'x-velocity',
+            'y-velocity',
+            'pressure',
+            'dx-velocity-dx',
+            'dy-velocity-dx',
+            'dp-dx',
+            'dx-velocity-dy',
+            'dy-velocity-dy',
+            'dp-dy',
+            'turb-diss-rate',
+            'turb-kinetic-energy',
+        ]
+
+        self.csv_features = self.features_to_keep + self.features_coordinates + self.features_to_remove
+
         self.active_vectors_2d = ['      x-velocity', '      y-velocity']
-        self.features_to_remove = ['nodenumber', 'boundary-normal-dist']
-        self.features_coordinates = ['    x-coordinate', '    y-coordinate']
 
         self.bc_dict = {
             2:	"interior",
@@ -82,12 +102,12 @@ class Config():
             "v_t": 2,               # velocity along the tangent versor
             "v_n": 3,               # velocity along the perpendicular versor
             "p": 4,                 # pressure on the face
-            "dt_v_t": 5,            # derivative along the tangent versor of v_t
-            "dt_v_n": 6,            # ...
-            "dt_p": 7,              # ...
-            "dn_v_t": 8,            # ...
-            "dn_v_n": 9,            # ...
-            "dn_p": 10,             # ...
+            "dv_t_dt": 5,            # derivative along the tangent versor of v_t
+            "dv_n_dt": 6,            # ...
+            "dp_dt": 7,              # ...
+            "dv_t_dn": 8,            # ...
+            "dv_n_dn": 9,            # ...
+            "dp_dn": 10,             # ...
             "component_id": 11,     # Maybe useful?
         }
 
@@ -102,13 +122,9 @@ class Config():
             "entity": None
         }
 
-        hyperparams_to_save = {}
+        logged_hyperparams = {}
 
-        return_dict.update({"config":hyperparams_to_save})
+        return_dict.update({"config":logged_hyperparams})
 
         return return_dict
     
-class ModelLogging(TypedDict):
-            model_log_mode: Optional[Literal["all, weights, gradients"]]
-            n_batches_freq: Annotated[int, Gt(0)]
-            log_graph: bool
