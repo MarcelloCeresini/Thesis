@@ -1,10 +1,9 @@
 from enum import Enum
 import os
 from typing import Annotated, Dict, Literal, Optional, TypedDict, Union
-from annotated_types import Gt
 
 import yaml
-from pydantic import BaseModel
+from pyvista import CellType 
 
 class Config():
 
@@ -35,6 +34,7 @@ class Config():
         self.dim = 2
         self.epsilon_for_point_matching = 1e-5
         self.mesh_to_features_scale_factor = 1e-3
+        self.labels_for_which_element: Literal["points", "faces"] = "faces"
 
         self.features_to_remove = [
             'cellnumber',
@@ -61,7 +61,7 @@ class Config():
 
         self.csv_features = self.features_to_keep + self.features_coordinates + self.features_to_remove
 
-        self.active_vectors_2d = ['      x-velocity', '      y-velocity']
+        self.active_vectors_2d = ['x-velocity', 'y-velocity']
 
         self.bc_dict = {
             2:	"interior",
@@ -85,6 +85,17 @@ class Config():
             '1': "triangle", # triangular
             '2': "tetrahedral",
             '3': "quad", # quadrilateral
+        }
+
+        self.pyvista_face_type_dict = {
+            2: CellType.LINE,
+        }
+
+        # TODO: do not know how to specify cells in 3D for pyvista
+        self.pyvista_cell_type_dict = {
+            3: CellType.POLYGON,
+            4: CellType.POLYGON,
+            5: CellType.POLYGON,
         }
 
         self.edge_type_feature={

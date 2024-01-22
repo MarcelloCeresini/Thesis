@@ -9,6 +9,6 @@ mesh_filename = os.path.join(conf.DATA_DIR, "msh", "2dtc_001R001_001_s01_ascii.m
 labels_filename = os.path.join(conf.DATA_DIR, "csv", "2dtc_001R001_001_s01_cell_values.csv")
 final_data_filename = os.path.join(conf.DATA_DIR, "raw", "2dtc_001R001_001_s01_ascii_W_LABELS.pt") 
 
-convert_msh_to_graph(mesh_filename, conf,
+data = convert_msh_to_graph(mesh_filename, conf,
                     filename_output_graph=final_data_filename,
                     labels_csv_filename=labels_filename)

@@ -17,7 +17,6 @@ import pandas as pd
 
 from config_pckg.config_file import Config
 # from submodules import pymesh
-import utils
 
 def get_mesh_component(mesh, mesh_component_idx):
     '''Returns a new mesh with only one of the "cells" components of the old mesh'''
@@ -153,59 +152,86 @@ def get_intersection_two_compontents(intersections_matrix, n1: int, n2: int):
     return intersections_matrix[n1][n2-n1-1]
 
 
-def plot_2d_cfd(mesh: Union[meshio.Mesh, pyvista.UnstructuredGrid], mesh_features: pd.DataFrame, conf: Config, plot_streamlines=False):
+def plot_2d_cfd(
+        mesh: Union[meshio.Mesh, pyvista.UnstructuredGrid], 
+        mesh_features: pd.DataFrame, 
+        conf: Config, 
+        plot_streamlines=False,
+        plot_from_points=False):
+
+
     # https://docs.pyvista.org/version/stable/user-guide/data_model.html
     # https://docs.pyvista.org/version/stable/examples/99-advanced/openfoam-tubes.html
-    if isinstance(mesh, meshio.Mesh):
-        pyv_mesh = toughio.from_meshio(mesh).to_pyvista()
-        # surf = pyvista.wrap(pyv_mesh.points).reconstruct_surface(progress_bar=True)
-        # surf.plot()
-    elif isinstance(mesh, pyvista.UnstructuredGrid):
+    if plot_from_points:
+        if isinstance(mesh, meshio.Mesh):
+            pyv_mesh = toughio.from_meshio(mesh).to_pyvista()
+            # surf = pyvista.wrap(pyv_mesh.points).reconstruct_surface(progress_bar=True)
+            # surf.plot()
+        elif isinstance(mesh, pyvista.UnstructuredGrid):
+            pyv_mesh = mesh
+    else:
+        assert isinstance(mesh, pyvista.UnstructuredGrid), "Cannot plot well face features from meshio \
+              meshes, create the mesh by yourself with connectivity data through https://docs.pyvista.org/version/stable/api/core/_autosummary/pyvista.UnstructuredGrid.html#pyvista-unstructuredgrid \
+              and directly pass that one to this function"
         pyv_mesh = mesh
     
-
     velocity = np.concatenate([
                     mesh_features[conf.active_vectors_2d].to_numpy(),
                     np.zeros([len(mesh_features),1])], 
                 axis=1)
 
-    for feature in mesh_features:
-        pyv_mesh.point_data[feature] = mesh_features[feature]
+    match conf.labels_for_which_element:
+        case "points":
+            
+            for feature in mesh_features:
+                pyv_mesh.point_data[feature] = mesh_features[feature]
 
-    pyv_mesh.point_data["velocity"] = velocity
+            pyv_mesh.point_data["velocity"] = velocity
+            pyv_mesh.set_active_vectors("velocity", preference="point")
+        
+        case "faces":
+            for feature in mesh_features:
+                pyv_mesh.cell_data[feature] = mesh_features[feature].values
+
+            pyv_mesh.cell_data["velocity"] = velocity
+            pyv_mesh.set_active_vectors("velocity", preference="cell")
+
     pyv_mesh.points[:,2] *= 0 # sanity check
-    pyv_mesh.set_active_vectors("velocity")
 
     ### Plot pressure
     pl = pyvista.Plotter()
-    pl.add_mesh(pyv_mesh, scalars='        pressure', lighting=False, scalar_bar_args={'title': 'Pressure'}, cmap="Spectral")
+    pl.add_mesh(pyv_mesh, scalars='pressure', lighting=False, 
+                scalar_bar_args={'title': 'Pressure'}, cmap="Spectral")
     pl.camera_position = 'xy'
     pl.enable_anti_aliasing()
     pl.show()
 
     pl = pyvista.Plotter(shape=("1/2"))
     pl.subplot(2)
-    pl.add_mesh(pyv_mesh, scalars='velocity', lighting=False, scalar_bar_args={'title': 'Velocity Magnitude'}, cmap="Spectral")             
+    pl.add_mesh(pyv_mesh, scalars='velocity', lighting=False, 
+                scalar_bar_args={'title': 'Velocity Magnitude'}, cmap="Spectral")             
     pl.camera_position = 'xy'
     pl.subplot(0)
-    pl.add_mesh(pyv_mesh, scalars='velocity', component=0, lighting=False, scalar_bar_args={'title': 'x-Velocity'}, cmap="Spectral")
+    pl.add_mesh(pyv_mesh, scalars='velocity', component=0, lighting=False, 
+                scalar_bar_args={'title': 'x-Velocity'}, cmap="Spectral")
     pl.camera_position = 'xy'
     pl.subplot(1)
-    pl.add_mesh(pyv_mesh, scalars='velocity', component=1, lighting=False, scalar_bar_args={'title': 'y-Velocity'}, cmap="Spectral")
+    pl.add_mesh(pyv_mesh, scalars='velocity', component=1, lighting=False, 
+                scalar_bar_args={'title': 'y-Velocity'}, cmap="Spectral")
     pl.camera_position = 'xy'
     pl.show()
 
     pl = pyvista.Plotter(shape=("1/1"))
     pl.subplot(0)
-    pl.add_mesh(pyv_mesh, scalars='  turb-diss-rate', lighting=False, scalar_bar_args={'title': 'turb-diss-rate'}, cmap="Spectral")
+    pl.add_mesh(pyv_mesh, scalars='turb-diss-rate', lighting=False, 
+                scalar_bar_args={'title': 'turb-diss-rate'}, cmap="Spectral")
     pl.camera_position = 'xy'
     pl.subplot(1)
-    pl.add_mesh(pyv_mesh, scalars='turb-kinetic-energy', lighting=False, scalar_bar_args={'title': 'turb-kinetic-energy'}, cmap="Spectral")
+    pl.add_mesh(pyv_mesh, scalars='turb-kinetic-energy', lighting=False, 
+                scalar_bar_args={'title': 'turb-kinetic-energy'}, cmap="Spectral")
     pl.camera_position = 'xy'
     pl.show()
 
-    # #### Plot velocity
-    
     # #### Plot categorical data in mesh
     # pl.add_mesh(mesh, scalars="somethin", categproes=True)
 
@@ -429,18 +455,8 @@ def map_vertex_pair_to_face_idx(vertex_pair, face_to_node_correspondance, face_i
                                                face_to_node_correspondance[:,1] == vertex_pair[1]))][0]
 
 
-conf = Config()
 
-mesh_filename = os.path.join(conf.DATA_DIR, "raw", "2dtc_001R001_001_s01_ascii.msh") # 2D mesh, ASCII
-labels_filename = os.path.join(conf.DATA_DIR, "raw", "2dtc_001R001_001_s01_cell_values.csv")
-final_data_filename = os.path.join(conf.DATA_DIR, "interim", "2dtc_001R001_001_s01_ascii_W_LABELS.pt") 
-
-utils.convert_msh_to_graph(mesh_filename, conf,
-                           filename_output_graph=final_data_filename,
-                           labels_csv_filename=labels_filename)
-
-sys.exit()
-
+'''
 # mesh_filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "2dtc_001R001_001_s01.msh") # 2D mesh, binary
 features_filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "2dtc_001R001_001_s01_nodal_values.csv")
 # filename = os.path.join(conf.DATA_DIR, "initial_exploration", "raw", "profilo_end.msh") # 3D mesh, ascii (broken for now)
@@ -593,3 +609,5 @@ mesh_coords = reduced_features[conf.features_coordinates].iloc[map_mesh_to_featu
 # block = examples.download_openfoam_tubes()
 
 plot_2d_cfd(mesh, mesh_features, conf)
+
+'''

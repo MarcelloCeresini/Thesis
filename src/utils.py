@@ -10,20 +10,21 @@ import matplotlib.pyplot as plt
 from scipy.spatial import Delaunay
 from icecream import ic
 import torch
-from torch_geometric.data import Data
+from torch_geometric.data import Data, HeteroData
 import pandas as pd
 from circle_fit import hyperLSQ
 import torch
 
 from config_pckg.config_file import Config
-
+import read_mesh_meshio_forked
+from mesh_exploration import plot_2d_cfd
 
 def read_mesh(filename, mode: Literal["meshio", "pyvista", "toughio"], conf: Config, plot=True):
     '''Reads mesh given mode'''
     # mesh = meshio.read(filename)
     match mode:
         case "meshio":
-            mesh = meshio.ansys.read(filename)
+            mesh = read_mesh_meshio_forked.read(filename)
             mesh.points *= conf.mesh_to_features_scale_factor
             return mesh
         case "pyvista":
@@ -396,7 +397,15 @@ def get_labels(positions, csv_filename, conf, check_biunivocity):
         raise NotImplementedError("Not implemented for 3d")
     
 
-def convert_msh_to_graph(filename_input_msh, conf:Config, filename_output_graph=None, labels_csv_filename=None):
+def convert_msh_to_graph(
+        filename_input_msh, 
+        conf:Config,
+        complex_graph=False,
+        filename_output_graph=None, 
+        labels_csv_filename=None,
+        plot_mesh=False,
+        ):
+    
     '''Given an ASCII .msh file from ANSA, returns a graph and saves it to memory'''
     if filename_output_graph == None:
         print("Warning: no output location specified, graph will NOT be saved to disk")
@@ -404,6 +413,8 @@ def convert_msh_to_graph(filename_input_msh, conf:Config, filename_output_graph=
     conf = Config()
 
     mesh = read_mesh(filename_input_msh, mode="meshio", conf=conf, plot=False)
+
+    vertices_positions = mesh.points
 
     cell_center_positions, CcCc_edges_bidir, vertices_in_cells = get_cell_data(mesh, conf)
     n_cells = len(cell_center_positions)
@@ -413,63 +424,143 @@ def convert_msh_to_graph(filename_input_msh, conf:Config, filename_output_graph=
     
     face_center_features, face_center_ord_features_mask = get_face_BC_attributes(mesh, face_center_positions, vertices_in_faces, conf)
 
-    graph_nodes_positions = np.concatenate([cell_center_positions, face_center_positions])
-
-    # shift face indices
-    FcFc_edges[:,:] += n_cells
-    CcFc_edges[:,1] += n_cells # first indices refer to cell centers and so do not need to be shifted
-
-    # Add graph_edge bidirectionality
-    FcFc_edges_bidir = np.concatenate([FcFc_edges, np.flip(FcFc_edges, axis=1)], axis=0)
-    CcFc_edges_bidir = np.concatenate([CcFc_edges, np.flip(CcFc_edges, axis=1)], axis=0)
-
-    graph_edges = np.concatenate([CcCc_edges_bidir, FcFc_edges_bidir, CcFc_edges_bidir])
-
-    graph_edge_attr = np.concatenate([np.ones((len(CcCc_edges_bidir), 1)) * conf.edge_type_feature["cell_cell"],
-                                      np.ones((len(FcFc_edges_bidir), 1)) * conf.edge_type_feature["face_face"],
-                                      np.ones((len(CcFc_edges_bidir), 1)) * conf.edge_type_feature["cell_face"]])
-
-    graph_node_attr = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
-                                      face_center_features])
-
-    graph_node_attr_mask = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
-                                           face_center_ord_features_mask])
-
-    data = Data(
-        edge_index=torch.tensor(graph_edges).t().contiguous(), 
-        pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
-        edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
-        x=torch.tensor(graph_node_attr, dtype=torch.float32),
-        y=None
-    )
-
-    data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
-
-    data.n_cells = torch.tensor(n_cells)
-    data.n_faces = torch.tensor(n_faces)
-
-    data.n_cell_edges = torch.tensor(len(CcCc_edges_bidir))
-    data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
-    data.n_cell_face_edges = torch.tensor(len(CcFc_edges_bidir))
-
     if labels_csv_filename:
-        # TODO: is face_center right for the labels of the simulation?
-        # TODO: plot the results to see if it's right
         face_center_labels = get_labels(face_center_positions, 
                                         labels_csv_filename, 
                                         conf, 
                                         check_biunivocity=True)
+        
         # cell_center_labels = get_labels(cell_center_positions, labels_csv_filename)
 
-    face_label_dim = len(conf.features_to_keep)
+        # Unfortunately meshio/toughio/pyvista are not intelligent enough, so we need to remake the mesh from scratch
+        # when using faces to align label indices
+        if plot_mesh:
+            if conf.dim == 2:
+
+                face_list_for_pyvista = np.concatenate(
+                    [[len(v), *v] for v in vertices_in_faces]
+                )
+
+                
+                facetype_list_for_pyvista = [conf.pyvista_face_type_dict[len(v)] for v in vertices_in_faces]
+
+                # TODO: list cells (type = Polygon) and compute values through faces in cell 
+                # (weighted average wrt distance) 
+                cell_list_for_pyvista = np.concatenate(
+                    [[len(v), *v] for v in vertices_in_cells]
+                )
+
+                pyv_mesh = pyvista.UnstructuredGrid(
+                    cell_list_for_pyvista,
+                    celltype_list_for_pyvista,
+                    mesh.points,
+                )
+
+
+
+                plot_2d_cfd(pyv_mesh, face_center_labels, conf, plot_from_points=False)
+            else:
+                # cell_list_for_pyvista = np.concatenate(
+                #     [[len(v), *v] for v in vertices_in_cells]
+                # )
+                # celltype_list_for_pyvista = np.concatenate(
+                #     [conf.pyvista_cell_type_dict[len(v)] for v in vertices_in_cells]
+                # )
+                raise NotImplementedError("implement dim = 3")
+
+
+    if not complex_graph:
+        if conf.dim == 2:
+            graph_nodes_positions = face_center_positions
+            FcFc_edges_bidir = np.concatenate([FcFc_edges, np.flip(FcFc_edges, axis=1)], axis=0)
+            graph_edges = FcFc_edges_bidir
+            graph_node_attr = face_center_features
+            graph_node_attr_mask = face_center_ord_features_mask
+
+            data = Data(
+                edge_index=torch.tensor(graph_edges).t().contiguous(), 
+                pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
+                # edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
+                x=torch.tensor(graph_node_attr, dtype=torch.float32),
+                y=None
+            )
+
+            data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
+
+            data.n_faces = torch.tensor(n_faces)
+            data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
+            face_label_dim = len(conf.features_to_keep)
+
+            data.y = torch.tensor(face_center_labels.values, dtype=torch.float32)
+            # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
+
+            # data only needed for visualization / recreation of mesh from graph
+            ########
+            data.cell_list_for_pyvista = np.concatenate(
+                    [[len(v), *v] for v in vertices_in_faces]
+                )
+            data.celltype_list_for_pyvista = [conf.pyvista_face_type_dict[len(v)] for v in vertices_in_faces]
+            data.mesh_points = vertices_positions
+            data.label_names = conf.features_to_keep
+            data.feature_names = list(conf.graph_node_feature_dict.keys())
+            ########
+
+        else:
+            raise NotImplementedError("Implement dim = 3")
+    else:
+        if conf.dim == 2:
+            
+            graph_nodes_positions = np.concatenate([cell_center_positions, face_center_positions])
+
+            # shift face indices
+            FcFc_edges[:,:] += n_cells
+            CcFc_edges[:,1] += n_cells # first indices refer to cell centers and so do not need to be shifted
+
+            # Add graph_edge bidirectionality
+            FcFc_edges_bidir = np.concatenate([FcFc_edges, np.flip(FcFc_edges, axis=1)], axis=0)
+            CcFc_edges_bidir = np.concatenate([CcFc_edges, np.flip(CcFc_edges, axis=1)], axis=0)
+
+            graph_edges = np.concatenate([CcCc_edges_bidir, FcFc_edges_bidir, CcFc_edges_bidir])
+
+            graph_edge_attr = np.concatenate([np.ones((len(CcCc_edges_bidir), 1)) * conf.edge_type_feature["cell_cell"],
+                                            np.ones((len(FcFc_edges_bidir), 1)) * conf.edge_type_feature["face_face"],
+                                            np.ones((len(CcFc_edges_bidir), 1)) * conf.edge_type_feature["cell_face"]])
+
+            graph_node_attr = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
+                                            face_center_features])
+
+            graph_node_attr_mask = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
+                                                face_center_ord_features_mask])
+            data = Data(
+                edge_index=torch.tensor(graph_edges).t().contiguous(), 
+                pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
+                edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
+                x=torch.tensor(graph_node_attr, dtype=torch.float32),
+                y=None
+            )
+            
+            data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
+
+            data.n_cells = torch.tensor(n_cells)
+            data.n_faces = torch.tensor(n_faces)
+
+            data.n_cell_edges = torch.tensor(len(CcCc_edges_bidir))
+            data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
+            data.n_cell_face_edges = torch.tensor(len(CcFc_edges_bidir))
+
+            face_label_dim = len(conf.features_to_keep)
+
+            data.y = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
+                                        face_center_labels]), dtype=torch.float32)
     
-    data.y = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
-                                          face_center_labels]), dtype=torch.float32)
-    
-    data.y_mask = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
-                                               np.ones([n_faces, face_label_dim])]), dtype=torch.bool)
+            data.y_mask = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
+                                                    np.ones([n_faces, face_label_dim])]), dtype=torch.bool)
+            
+        else:
+            raise NotImplementedError("Implement dim = 3")
+
 
     if filename_output_graph:
         torch.save(data, filename_output_graph)
 
-    return data
+    return mesh, data

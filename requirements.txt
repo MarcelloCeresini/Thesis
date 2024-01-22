@@ -2,5 +2,11 @@ pyyaml
 pydantic
 wandb
 torch
-gmshpaser
-meshio
+torch-geometric
+pyvista
+toughio
+matplotlib
+icecream
+pandas
+circle-fit
+h5py
