@@ -1,5 +1,5 @@
-import os
-from typing import Literal, Optional
+import pickle
+from typing import Literal
 import itertools
 
 import meshio
@@ -19,7 +19,7 @@ from config_pckg.config_file import Config
 import read_mesh_meshio_forked
 from mesh_exploration import plot_2d_cfd
 
-def read_mesh(filename, mode: Literal["meshio", "pyvista", "toughio"], conf: Config, plot=True):
+def read_mesh(filename, mode: Literal["meshio", "pyvista", "toughio"], conf: Config):
     '''Reads mesh given mode'''
     # mesh = meshio.read(filename)
     match mode:
@@ -32,8 +32,6 @@ def read_mesh(filename, mode: Literal["meshio", "pyvista", "toughio"], conf: Con
             # See: https://docs.pyvista.org/version/stable/api/core/_autosummary/pyvista.UnstructuredGrid.html#pyvista.UnstructuredGrid
             mesh = pyvista.read(filename)
             mesh.points *= conf.mesh_to_features_scale_factor
-            if plot:
-                mesh.plot()
             return mesh
         case "toughio":
             raise NotImplementedError("How to implement scaling points?")
@@ -290,6 +288,8 @@ def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in
     cellblock_idx_bc_type = [zone_id_bc_type[key] for key in mesh.info["zone_id_list_cellblocks"]]
     cellblock_idx_name = [mesh.info["global"][str(key)]["zone_name"] if str(key) in mesh.info["global"].keys() else "" for key in mesh.info["zone_id_list_cellblocks"] ]
 
+    inlet_points = []
+
     for i, tmp in enumerate(zip(mesh.cells, cellblock_idx_bc_type, cellblock_idx_name)):
         faceblock, bc_type, name = tmp
 
@@ -331,16 +331,23 @@ def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in
                 face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_n_dt"]] = 0
                 face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_n_dt"]] = True
             case 10: # velocity_inlet
+                inlet_points.append(points_of_faceblock_positions)
                 # TODO: is this right? should v_normal be =0?
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed
+                # TODO: is it the opposite? or is it independent of the direction of the face and it should be v_x fixed and v_y = 0?
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
                 face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
-
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
+                # TODO: should i check the direction of the face before giving the value?
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = conf.air_speed
                 face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = True
             case _:
                 raise NotImplementedError("Didn't implement this kind of BC yet")
             
-    return face_center_attr_BC, face_center_attr_BC_mask
+    if len(inlet_points) >= 1:
+        inlet_points = np.stack(inlet_points)[0]
+    else:
+        print("WARNING, no inlet points found")
+    
+    return face_center_attr_BC, face_center_attr_BC_mask, inlet_points
     
 
 def get_labels(positions, csv_filename, conf, check_biunivocity):
@@ -396,86 +403,60 @@ def get_labels(positions, csv_filename, conf, check_biunivocity):
     else:
         raise NotImplementedError("Not implemented for 3d")
     
-
-def convert_msh_to_graph(
-        filename_input_msh, 
-        conf:Config,
-        complex_graph=False,
-        filename_output_graph=None, 
-        labels_csv_filename=None,
-        plot_mesh=False,
+def convert_msh_to_mesh_complete_info_obj(
+        conf: Config,
+        filename_input_msh,
+        filename_output_mesh_complete_obj = None,
         ):
-    
+
     '''Given an ASCII .msh file from ANSA, returns a graph and saves it to memory'''
-    if filename_output_graph == None:
-        print("Warning: no output location specified, graph will NOT be saved to disk")
+    if filename_output_mesh_complete_obj is None:
+        print("Warning: no output location specified, meshCompleteObj will NOT be saved to disk")
         
     conf = Config()
 
-    mesh = read_mesh(filename_input_msh, mode="meshio", conf=conf, plot=False)
-
-    vertices_positions = mesh.points
+    mesh = read_mesh(filename_input_msh, mode="meshio", conf=conf)
 
     cell_center_positions, CcCc_edges_bidir, vertices_in_cells = get_cell_data(mesh, conf)
-    n_cells = len(cell_center_positions)
     
     face_center_positions, FcFc_edges, vertices_in_faces, CcFc_edges = get_face_data(mesh, vertices_in_cells)
-    n_faces = len(face_center_positions)
     
-    face_center_features, face_center_ord_features_mask = get_face_BC_attributes(mesh, face_center_positions, vertices_in_faces, conf)
+    mesh_complete_instance = MeshCompleteInfo(
+        conf,
+        mesh,
+        cell_center_positions,
+        CcCc_edges_bidir,
+        vertices_in_cells,
+        face_center_positions,
+        FcFc_edges,
+        vertices_in_faces,
+        CcFc_edges
+    )
 
-    if labels_csv_filename:
-        face_center_labels = get_labels(face_center_positions, 
-                                        labels_csv_filename, 
-                                        conf, 
-                                        check_biunivocity=True)
-        
-        # cell_center_labels = get_labels(cell_center_positions, labels_csv_filename)
+    if filename_output_mesh_complete_obj is not None:
+        mesh_complete_instance.save_to_disk(filename_output_mesh_complete_obj)
 
-        # Unfortunately meshio/toughio/pyvista are not intelligent enough, so we need to remake the mesh from scratch
-        # when using faces to align label indices
-        if plot_mesh:
-            if conf.dim == 2:
-
-                face_list_for_pyvista = np.concatenate(
-                    [[len(v), *v] for v in vertices_in_faces]
-                )
-
-                
-                facetype_list_for_pyvista = [conf.pyvista_face_type_dict[len(v)] for v in vertices_in_faces]
-
-                # TODO: list cells (type = Polygon) and compute values through faces in cell 
-                # (weighted average wrt distance) 
-                cell_list_for_pyvista = np.concatenate(
-                    [[len(v), *v] for v in vertices_in_cells]
-                )
-
-                pyv_mesh = pyvista.UnstructuredGrid(
-                    cell_list_for_pyvista,
-                    celltype_list_for_pyvista,
-                    mesh.points,
-                )
+    return mesh_complete_instance
 
 
-
-                plot_2d_cfd(pyv_mesh, face_center_labels, conf, plot_from_points=False)
-            else:
-                # cell_list_for_pyvista = np.concatenate(
-                #     [[len(v), *v] for v in vertices_in_cells]
-                # )
-                # celltype_list_for_pyvista = np.concatenate(
-                #     [conf.pyvista_cell_type_dict[len(v)] for v in vertices_in_cells]
-                # )
-                raise NotImplementedError("implement dim = 3")
-
+def convert_mesh_complete_info_obj_to_graph(
+        conf:Config,
+        meshCI, # MeshCompleteInfo object
+        complex_graph=False,
+        filename_output_graph=None, 
+        ):
+    
+    '''Given a MeshCompleteInfo instance, returns a graph and saves it to memory'''
+    if filename_output_graph == None:
+        print("Warning: no output location specified, graph will NOT be saved to disk")
 
     if not complex_graph:
         if conf.dim == 2:
-            graph_nodes_positions = face_center_positions
-            FcFc_edges_bidir = np.concatenate([FcFc_edges, np.flip(FcFc_edges, axis=1)], axis=0)
+            graph_nodes_positions = meshCI.face_center_positions
+            FcFc_edges_bidir = np.concatenate([meshCI.FcFc_edges, np.flip(meshCI.FcFc_edges, axis=1)], axis=0)
             graph_edges = FcFc_edges_bidir
-            graph_node_attr = face_center_features
-            graph_node_attr_mask = face_center_ord_features_mask
+            graph_node_attr = meshCI.face_center_features
+            graph_node_attr_mask = meshCI.face_center_ord_features_mask
 
             data = Data(
                 edge_index=torch.tensor(graph_edges).t().contiguous(), 
@@ -487,32 +468,27 @@ def convert_msh_to_graph(
 
             data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
 
-            data.n_faces = torch.tensor(n_faces)
+            data.n_faces = torch.tensor(meshCI.face_center_positions.shape[0])
             data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
             face_label_dim = len(conf.features_to_keep)
 
-            data.y = torch.tensor(face_center_labels.values, dtype=torch.float32)
+            data.y = torch.tensor(meshCI.face_center_labels.values, dtype=torch.float32)
             # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
-
-            # data only needed for visualization / recreation of mesh from graph
-            ########
-            data.cell_list_for_pyvista = np.concatenate(
-                    [[len(v), *v] for v in vertices_in_faces]
-                )
-            data.celltype_list_for_pyvista = [conf.pyvista_face_type_dict[len(v)] for v in vertices_in_faces]
-            data.mesh_points = vertices_positions
-            data.label_names = conf.features_to_keep
-            data.feature_names = list(conf.graph_node_feature_dict.keys())
-            ########
 
         else:
             raise NotImplementedError("Implement dim = 3")
     else:
         if conf.dim == 2:
             
-            graph_nodes_positions = np.concatenate([cell_center_positions, face_center_positions])
+            graph_nodes_positions = np.concatenate([meshCI.cell_center_positions, meshCI.face_center_positions])
 
             # shift face indices
+            FcFc_edges = meshCI.FcFc_edges
+            CcFc_edges = meshCI.CcFc_edges
+            CcCc_edges_bidir = meshCI.CcCc_edges_bidir
+            n_cells = meshCI.cell_center_positions.shape[0]
+            n_faces = meshCI.face_center_positions.shape[0]
+
             FcFc_edges[:,:] += n_cells
             CcFc_edges[:,1] += n_cells # first indices refer to cell centers and so do not need to be shifted
 
@@ -527,10 +503,10 @@ def convert_msh_to_graph(
                                             np.ones((len(CcFc_edges_bidir), 1)) * conf.edge_type_feature["cell_face"]])
 
             graph_node_attr = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
-                                            face_center_features])
+                                            meshCI.face_center_features])
 
             graph_node_attr_mask = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
-                                                face_center_ord_features_mask])
+                                                meshCI.face_center_ord_features_mask])
             data = Data(
                 edge_index=torch.tensor(graph_edges).t().contiguous(), 
                 pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
@@ -551,7 +527,7 @@ def convert_msh_to_graph(
             face_label_dim = len(conf.features_to_keep)
 
             data.y = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
-                                        face_center_labels]), dtype=torch.float32)
+                                        meshCI.face_center_labels]), dtype=torch.float32)
     
             data.y_mask = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
                                                     np.ones([n_faces, face_label_dim])]), dtype=torch.bool)
@@ -563,4 +539,200 @@ def convert_msh_to_graph(
     if filename_output_graph:
         torch.save(data, filename_output_graph)
 
-    return mesh, data
+    return data
+
+class MeshCompleteInfo:
+    def __init__(
+            self,
+            conf: Config,
+            mesh: meshio.Mesh,
+            cell_center_positions,
+            CcCc_edges_bidir,
+            vertices_in_cells,
+            face_center_positions, 
+            FcFc_edges, 
+            vertices_in_faces,
+            CcFc_edges,
+                 ) -> None:
+        self.conf = conf
+        self.mesh = mesh
+        self.cell_center_positions = cell_center_positions
+        self.CcCc_edges_bidir = CcCc_edges_bidir
+        self.vertices_in_cells = vertices_in_cells
+        self.face_center_positions = face_center_positions 
+        self.FcFc_edges = FcFc_edges 
+        self.vertices_in_faces = vertices_in_faces
+        self.CcFc_edges = CcFc_edges
+
+        self.face_center_features, self.face_center_ord_features_mask, self.inlet_points_positions = \
+            get_face_BC_attributes(mesh, face_center_positions, vertices_in_faces, conf)
+        
+        self.vertex_labels = None
+        self.face_center_labels = None
+        self.cell_center_labels = None
+
+
+    def add_labels(self, labels_csv_filename, mode:Literal["vertex","element"]="element"):
+        
+        match mode:
+            case "element":
+                if self.conf.dim == 2:
+                    self.face_center_labels = get_labels(
+                        self.face_center_positions, 
+                        labels_csv_filename, 
+                        self.conf, 
+                        check_biunivocity=True)
+                elif self.conf.dim == 3:
+                    raise NotImplementedError("Implement dim = 3")
+                    self.cell_center_labels = get_labels(
+                            self.cell_center_positions, 
+                            labels_csv_filename, 
+                            self.conf, 
+                            check_biunivocity=True)
+            case "vertex":
+                self.vertex_labels = get_labels(
+                    self.mesh.points, 
+                    labels_csv_filename, 
+                    self.conf, 
+                    check_biunivocity=True)
+                
+    
+    def save_to_disk(self, filename):
+        '''
+        Pickle dumps the object to the filename.
+
+        To reload it:
+        with open(filename, 'rb') as f:
+            meshCompleteInfoInstance = pickle.load(f)
+        '''
+        with open(filename, "wb") as f:
+            pickle.dump(self, f, -1)
+
+
+    def plot_mesh(self, 
+                  what_to_plot = None,
+                  ):
+        '''
+        what_to_plot whould be a list of tuples (tup[0], tup[1], tup[2], tup[3]):
+            - tup[0]: Literal["vertex", "face", "cell"] --> can be "vertex", "face" or "cell"
+
+            - tup[1]: Literal["label", "features"] --> should be "label". If tup[0] is "face" you can also have tup[1] = "features"
+
+            - tup[2] should be:
+                - if tup[1] is label, an element of conf.features_to_keep
+                - if tup[1] is feature, a key of conf.graph_node_feature_dict
+                - additional special value "streamlines" in case --> ("cell", "label", "velocity") --> automatically add streamlines
+        '''
+        assert self.conf.dim == 2, "Implement dim = 3"
+
+        # TODO: should we create permanent objects to avoid recomputation?
+
+        if self.vertex_labels is not None:
+            vertex_pyv_mesh = toughio.from_meshio(self.mesh).to_pyvista()
+
+        if self.face_center_labels is not None:
+            face_list_for_pyvista = np.concatenate(
+                [[len(v), *v] for v in self.vertices_in_faces]
+            )
+            facetype_list_for_pyvista = [pyvista.CellType.LINE for _ in self.vertices_in_faces]
+
+            face_pyv_mesh = pyvista.UnstructuredGrid(
+                                face_list_for_pyvista,
+                                facetype_list_for_pyvista,
+                                self.mesh.points
+                            )
+            
+            cell_list_for_pyvista = np.concatenate(
+                        [[len(v), *v] for v in self.vertices_in_cells]
+                    )
+
+            celltype_list_for_pyvista = [pyvista.CellType.POLYGON for _ in self.vertices_in_cells]
+
+            cell_pyv_mesh = pyvista.UnstructuredGrid(
+                cell_list_for_pyvista,
+                celltype_list_for_pyvista,
+                self.mesh.points,
+            )
+
+            faces_in_cells = pd.DataFrame(data=self.CcFc_edges, columns=["cell_idx", "face_idx"]).groupby("cell_idx")["face_idx"].apply(list)
+            # TODO: improve from mean to weighted avg depending on distance
+            self.cell_center_labels = pd.DataFrame(
+                [np.mean(self.face_center_labels.iloc[faces_idx], axis=0) for faces_idx in faces_in_cells]
+            )
+
+        for tup in what_to_plot:
+            match tup[0]:
+                case "vertex":
+                    assert self.vertex_labels is not None, "You did not use 'add_labels' with mode='vertex' on this mesh, no labels present for vertices"
+                    assert tup[1] == "label", "Points do not have features (they only have LABELS)"
+                    vertex_pyv_mesh.point_data[tup[2]] = self.vertex_labels[tup[2]]
+                    
+                    pl = pyvista.Plotter()
+                    pl.add_mesh(vertex_pyv_mesh, scalars=tup[2], lighting=False,
+                                scalar_bar_args={"title":tup[2]}, cmap="Spectral")
+                    pl.camera_position = "xy"
+                    pl.enable_anti_aliasing()
+                    pl.show()
+
+                case "face":
+                    if tup[1] == "label":
+                        assert self.face_center_labels is not None, "You did not use 'add_labels' with mode='element' on this mesh, no labels present for faces or cells"
+                        face_pyv_mesh.cell_data[tup[2]] = self.face_center_labels[tup[2]]
+                    elif tup[1] == "feature":
+                        face_pyv_mesh.cell_data[tup[2]] = self.face_center_features[:,self.conf.graph_node_feature_dict[tup[2]]]
+                    else:
+                        raise ValueError(f"tup[1] can be only 'label' or 'feature', you wrote {tup[1]}")
+                    
+                    pl = pyvista.Plotter()
+                    pl.add_mesh(face_pyv_mesh, scalars=tup[2], lighting=False,
+                                scalar_bar_args={"title":tup[2]}, cmap="Spectral")
+                    pl.camera_position = "xy"
+                    pl.enable_anti_aliasing()
+                    pl.show()
+
+                case "cell":
+                    
+                    assert tup[1] == "label", "Cells do not have features (they only have LABELS)"
+                    assert self.face_center_labels is not None, "You did not use 'add_labels' with mode='element' on this mesh, no labels present for faces or cells"
+                    
+                    if not tup[2] == "streamlines":
+                        # TODO: implement velocity magnitude if needed
+                        cell_pyv_mesh.cell_data[tup[2]] = self.cell_center_labels[tup[2]]
+                        
+                        pl = pyvista.Plotter()
+                        pl.add_mesh(cell_pyv_mesh, scalars=tup[2], lighting=False,
+                                    scalar_bar_args={"title":tup[2]}, cmap="Spectral")
+                        pl.camera_position = "xy"
+                        pl.enable_anti_aliasing()
+                        pl.show()
+                    else:
+                        raise NotImplementedError("Streamlines still not working")
+                        velocity = np.concatenate([
+                            self.cell_center_labels[self.conf.active_vectors_2d].to_numpy(),
+                            np.zeros([len(self.cell_center_labels),1])], 
+                        axis=1)
+                        cell_pyv_mesh.cell_data["velocity"] = velocity
+                        cell_pyv_mesh.set_active_vectors("velocity", preference="cell")
+
+                        lines = cell_pyv_mesh.streamlines_from_source(
+                            source=pyvista.PointSet(self.inlet_points_positions),
+                            vectors="velocity",
+                        )
+
+                        pl = pyvista.Plotter()
+                        pl.add_mesh(
+                            lines,
+                            render_lines_as_tubes=True,
+                            line_width=5,
+                            lighting=False,
+                        )
+                        pl.add_mesh(
+                            cell_pyv_mesh, 
+                            scalars="velocity", 
+                            lighting=False,
+                            cmap="Spectral", 
+                            opacity=0.3
+                        )
+                        pl.camera_position = "xy"
+                        pl.enable_anti_aliasing()
+                        pl.show()
