@@ -1,6 +1,9 @@
 import os
 import pickle
 from time import time
+from typing import Optional
+import glob
+from tqdm import tqdm
 
 import torch
 
@@ -8,7 +11,28 @@ from config_pckg.config_file import Config
 from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph
 
 
+def convert_all_msh_to_meshComplete(conf: Config(), input_dir: Optional[str], output_dir: str, input_filenames: Optional[list[str]] = None):
+
+    if input_dir is not None:
+        input_filenames = glob.glob(os.path.join(input_dir, "*.msh"))
+    else:
+        assert len(input_filenames) > 0, "No input files"
+    
+    for filename in tqdm(input_filenames):
+        msh_name = filename.split(os.sep)[-1].removesuffix("_ascii.msh")
+        meshComplete_filename = os.path.join(output_dir, msh_name+".pkl")
+        meshCompleteInstance = convert_msh_to_mesh_complete_info_obj(conf, filename, meshComplete_filename)
+
+
 if __name__ == "__main__":
+    conf = Config()
+    msh_filename = os.path.join(conf.EXTERNAL_FOLDER_MSH, "2dtc_002R001_001_s01_ascii.msh") # 2 flap
+    msh_filename = os.path.join(conf.EXTERNAL_FOLDER_MSH, "2dtc_001R001_001_s01_ascii.msh") # 1 flap
+    
+    convert_all_msh_to_meshComplete(conf, input_dir=None, output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE, input_filenames=[msh_filename])
+
+
+def initial_trial():
     conf = Config()
 
     msh_name = "2dtc_001R001_001_s01"
@@ -18,16 +42,15 @@ if __name__ == "__main__":
     labels_filename = os.path.join(conf.DATA_DIR, "csv", msh_name+"_cell_values.csv")
     final_data_filename = os.path.join(conf.DATA_DIR, "raw", msh_name+".pt")
 
-
     tic = time()
     meshCompleteInstance = convert_msh_to_mesh_complete_info_obj(
         conf,
-        msh_filename,
-        tmp_mesh_info_complete_filename
+        msh_filename
     )
-    print("msh -> meshComplete:             ", time()-tic)
+    print("msh -> meshComplete:         ", time()-tic)
     # To save "barebone graph" without labels
     meshCompleteInstance.save_to_disk(tmp_mesh_info_complete_filename)
+    # or put the path inside the convert function directly
 
     # To add labels and then save it
     tic=time()
@@ -64,3 +87,17 @@ if __name__ == "__main__":
 
     # To load it from disk:
     data = torch.load(final_data_filename)
+
+    # To visualize data from graph:
+    tic = time()
+    meshCompleteInstance.add_labels_from_graph(
+        data=data,
+        which_element_has_labels="face"
+    )
+    print("graph + meshComplete -> add_labels:  ", time()-tic)
+    
+    meshCompleteInstance.plot_mesh([
+        ("cell", "label", "pressure"),
+        ("cell", "label", "x-velocity"),
+        ("cell", "label", "y-velocity"),
+    ])

@@ -14,6 +14,7 @@ from torch_geometric.data import Data, HeteroData
 import pandas as pd
 from circle_fit import hyperLSQ
 import torch
+from torch_geometric.data import Data
 
 from config_pckg.config_file import Config
 import read_mesh_meshio_forked
@@ -595,6 +596,18 @@ class MeshCompleteInfo:
                     labels_csv_filename, 
                     self.conf, 
                     check_biunivocity=True)
+                
+    def add_labels_from_graph(self, data: Data, which_element_has_labels: Literal["vertex", "face", "cell"]):
+        match which_element_has_labels:
+            case "vertex":
+                assert data.y.shape[0] == self.mesh.points.shape[0], f"Data label shape {data.y.shape} does not match number of points in mesh {self.mesh.points.shape[0]}"
+                self.vertex_labels = pd.DataFrame(data.y, columns=self.conf.features_to_keep)
+            case "face":
+                assert data.y.shape[0] == self.face_center_positions.shape[0], f"Data label shape {data.y.shape} does not match number of faces in mesh {self.face_center_positions.shape[0]}"
+                self.face_center_labels = pd.DataFrame(data.y, columns=self.conf.features_to_keep)
+            case "cell":
+                assert data.y.shape[0] == self.cell_center_positions.shape[0], f"Data label shape {data.y.shape} does not match number of cells in mesh {self.cell_center_positions.shape[0]}"
+                self.cell_center_labels = pd.DataFrame(data.y, columns=self.conf.features_to_keep)
                 
     
     def save_to_disk(self, filename):
