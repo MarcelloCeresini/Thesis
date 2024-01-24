@@ -11,25 +11,36 @@ from config_pckg.config_file import Config
 from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph
 
 
-def convert_all_msh_to_meshComplete(conf: Config(), input_dir: Optional[str], output_dir: str, input_filenames: Optional[list[str]] = None):
+def convert_all_msh_to_meshComplete(conf: Config(), input_dir: Optional[str] = None, output_dir: Optional[str] = None, input_filenames: Optional[list[str]] = None):
 
     if input_dir is not None:
         input_filenames = glob.glob(os.path.join(input_dir, "*.msh"))
     else:
         assert len(input_filenames) > 0, "No input files"
     
-    for filename in tqdm(input_filenames):
+    obj_list = []
+
+    for filename in (pbar := tqdm(input_filenames)):
         msh_name = filename.split(os.sep)[-1].removesuffix("_ascii.msh")
-        meshComplete_filename = os.path.join(output_dir, msh_name+".pkl")
+        pbar.set_description(f"Parsing {msh_name}")
+
+        if output_dir is not None:
+            meshComplete_filename = os.path.join(output_dir, msh_name+".pkl")
+        else:
+            meshComplete_filename = None
+        
         meshCompleteInstance = convert_msh_to_mesh_complete_info_obj(conf, filename, meshComplete_filename)
+        
+        obj_list.append(meshCompleteInstance)
+
+    return obj_list
 
 
 if __name__ == "__main__":
     conf = Config()
-    msh_filename = os.path.join(conf.EXTERNAL_FOLDER_MSH, "2dtc_002R001_001_s01_ascii.msh") # 2 flap
-    msh_filename = os.path.join(conf.EXTERNAL_FOLDER_MSH, "2dtc_001R001_001_s01_ascii.msh") # 1 flap
-    
-    convert_all_msh_to_meshComplete(conf, input_dir=None, output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE, input_filenames=[msh_filename])
+    # convert_all_msh_to_meshComplete(conf, input_dir=conf.EXTERNAL_FOLDER_MSH, output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE)
+    # msh_filename = os.path.join(conf.EXTERNAL_FOLDER_MSH, "2dtc_002R002_001_s01.msh")
+    # convert_all_msh_to_meshComplete(conf, input_filenames=[msh_filename])
 
 
 def initial_trial():

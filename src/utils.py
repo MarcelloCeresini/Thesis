@@ -1,5 +1,6 @@
+import os
 import pickle
-from typing import Literal
+from typing import Literal, Optional
 import itertools
 
 import meshio
@@ -15,6 +16,7 @@ import pandas as pd
 from circle_fit import hyperLSQ
 import torch
 from torch_geometric.data import Data
+from scipy.spatial.distance import cdist
 
 from config_pckg.config_file import Config
 import read_mesh_meshio_forked
@@ -144,10 +146,47 @@ def get_all_edges(mesh):
 
 def make_cell(a):
     cell = list(a[0,:])
+    cell_closing_value = cell[0]
     for i in range(1,len(a)):
-        idx = np.argwhere(a[:,0]==cell[i])[0][0]
-        cell += [a[idx,1]]
+        correspondance = np.argwhere(a[:,0]==cell[i])
+        if correspondance.shape not in {(0,0), (0,1)}:
+
+            if correspondance.shape[0] > 1:
+                print("WARNING: this cell could be rotated in the other direction (msh is not coherent: adjacency list returns faces that do not recreate 'cyclically' a cell)")
+                print(a)
+                # more than one match (should be always this case)
+                for tmp in correspondance:
+                    tmp = tmp[0]
+                    value = a[tmp, 1]
+                    if (value not in cell) or (i==len(a)-1 and value == cell_closing_value):
+                        idx = tmp
+                        break
+            else:
+                idx = correspondance[0][0]
+
+            cell += [a[idx,1]]
+
+        else:
+            correspondance = np.argwhere(a[:,1]==cell[i])
+
+            if correspondance.shape[0] > 1:
+                # more than one match (should be always this case)
+                for tmp in correspondance:
+                    tmp = tmp[0]
+                    value = a[tmp, 0]
+                    if (value not in cell) or (i==len(a)-1 and value == cell_closing_value):
+                        idx = tmp
+                        break
+            else:
+                idx = correspondance[0][0]
+
+            cell += [a[idx,0]]
+            print("WARNING: this cell could be rotated in the other direction (msh is not coherent: adjacency list returns faces that do not recreate 'cyclically' a cell)")
+            print(a)# examd faulty cell: [[A, B], [B, C], [A, C]] --> connecting right side of each element to a corrisponding left side is impossible (C is never on the left)
+            # this means that one of the faces is given incorrectly from the msh, and we don't know the correct ordering of the vertices indexes inside the cell
+            
     assert cell[0] == cell[-1], "Something broken in reconstruction of cell"
+    assert len(cell) == len(a)+1, "Something strange happened"
     return cell[:-1]
 
 
@@ -169,8 +208,10 @@ def recreate_cells(mesh: meshio.Mesh, conf:Config):
     edge_list = np.concatenate([c.data for c in mesh.cells])
     adjacency_list = np.concatenate([get_adjacency_list(mesh, i) for i in range(len(mesh.cells))])
 
-    # TODO: change the info structure of the parser to make it more robust: WAIT until more samples arrive to make it more general
-    cell_types_list = mesh.info["elements"][8]["cell_type_cumulative"]
+    if not len(mesh.info["cell_type_cumulative"]) == 1:
+        raise NotImplementedError("Not implemented disconnected meshes yet") # TODO: does "cell_type_cumulative" always appear only once in msh?
+    
+    cell_types_list = mesh.info["cell_type_cumulative"][0]
 
     unique_vals, unique_counts = np.unique(cell_types_list, return_counts=True)
 
@@ -316,7 +357,7 @@ def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in
                     
                     face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = v_t
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
-                elif "w0" in name: # fixed wall, doesn't move
+                elif any(x in name for x in ["w0", "default-exterior"]): # fixed wall, doesn't move
                     face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
                 else:
@@ -358,6 +399,8 @@ def get_labels(positions, csv_filename, conf, check_biunivocity):
     features = pd.read_csv(csv_filename)
     features.columns = [f_name.strip() for f_name in features.columns]
 
+    assert len(positions) == len(features), f"Number of points ({len(positions)}) and CSV rows ({len(features)}) do not match"
+
     features = features[features.columns.difference(conf.features_to_remove)]
 
     map_pos_to_feature = np.zeros([len(positions), 2])
@@ -366,27 +409,31 @@ def get_labels(positions, csv_filename, conf, check_biunivocity):
         ord_pos, pos_old_idxs = sort_matrix(pts)
         ord_features, features_old_idxs = sort_matrix(features[conf.features_coordinates].to_numpy())
         
-        features_bounds = np.sort(np.stack([ord_features*(1-eps), ord_features*(1+eps)]), axis=0)
-        features_bound_1 = features_bounds[0,...]
-        features_bound_2 = features_bounds[1,...]
+        for i, (pos_old_idx, ft_old_idx, pos) in enumerate(zip(pos_old_idxs,
+                                                          features_old_idxs,
+                                                          ord_pos)):
+            map_pos_to_feature[i, 0], map_pos_to_feature[i, 1] = pos_old_idx, features_old_idxs[np.argmin(cdist([pos], ord_features)[0])]
+        # features_bounds = np.sort(np.stack([ord_features*(1-eps), ord_features*(1+eps)]), axis=0)
+        # features_bound_1 = features_bounds[0,...]
+        # features_bound_2 = features_bounds[1,...]
 
-        for i, (pos_old_idx, ft_old_idx, pos, ft_b1, ft_b2) in enumerate(zip(pos_old_idxs,
-                                                                              features_old_idxs,
-                                                                              ord_pos,
-                                                                              features_bound_1,
-                                                                              features_bound_2)):
-            if (ft_b1<=pos).all() and (pos<=ft_b2).all():
-                map_pos_to_feature[i, 0], map_pos_to_feature[i, 1] = pos_old_idx, ft_old_idx
-            else: # due to precision errors, ordering of the nodes could be different
-                found = False
-                for j, (tmp_1, tmp_2) in enumerate(zip(features_bound_1, features_bound_2)): # check them one by one
+        # for i, (pos_old_idx, ft_old_idx, pos, ft_b1, ft_b2) in enumerate(zip(pos_old_idxs,
+        #                                                                       features_old_idxs,
+        #                                                                       ord_pos,
+        #                                                                       features_bound_1,
+        #                                                                       features_bound_2)):
+        #     if (ft_b1<=pos).all() and (pos<=ft_b2).all():
+        #         map_pos_to_feature[i, 0], map_pos_to_feature[i, 1] = pos_old_idx, ft_old_idx
+        #     else: # due to precision errors, ordering of the nodes could be different
+        #         found = False
+        #         for j, (tmp_1, tmp_2) in enumerate(zip(features_bound_1, features_bound_2)): # check them one by one
                     
-                    if (tmp_1<=pos).all() and (pos<=tmp_2).all():
-                        map_pos_to_feature[i, 0], map_pos_to_feature[i, 1] = pos_old_idx, features_old_idxs[j]
-                        found = True
-                        break
-                if not found:
-                    raise ValueError("Points do not correspond")
+        #             if (tmp_1<=pos).all() and (pos<=tmp_2).all():
+        #                 map_pos_to_feature[i, 0], map_pos_to_feature[i, 1] = pos_old_idx, features_old_idxs[j]
+        #                 found = True
+        #                 break
+        #         if not found:
+        #             raise ValueError("Points do not correspond")
                 
         if check_biunivocity:
             assert len(np.unique(map_pos_to_feature[:,0])) == len(map_pos_to_feature), "Not biunivocal, for some mesh point there is no correspondance in features"
@@ -407,7 +454,7 @@ def get_labels(positions, csv_filename, conf, check_biunivocity):
 def convert_msh_to_mesh_complete_info_obj(
         conf: Config,
         filename_input_msh,
-        filename_output_mesh_complete_obj = None,
+        filename_output_mesh_complete_obj: Optional[str] = None,
         ):
 
     '''Given an ASCII .msh file from ANSA, returns a graph and saves it to memory'''
@@ -424,6 +471,7 @@ def convert_msh_to_mesh_complete_info_obj(
     
     mesh_complete_instance = MeshCompleteInfo(
         conf,
+        filename_input_msh,
         mesh,
         cell_center_positions,
         CcCc_edges_bidir,
@@ -546,6 +594,7 @@ class MeshCompleteInfo:
     def __init__(
             self,
             conf: Config,
+            path: str,
             mesh: meshio.Mesh,
             cell_center_positions,
             CcCc_edges_bidir,
@@ -556,6 +605,9 @@ class MeshCompleteInfo:
             CcFc_edges,
                  ) -> None:
         self.conf = conf
+        self.path = path
+        self.name = path.split(os.sep)[-1].removesuffix(".pkl")
+        self.group = 1 if "2dtc_001R" in self.name else 2
         self.mesh = mesh
         self.cell_center_positions = cell_center_positions
         self.CcCc_edges_bidir = CcCc_edges_bidir
@@ -610,6 +662,11 @@ class MeshCompleteInfo:
                 self.cell_center_labels = pd.DataFrame(data.y, columns=self.conf.features_to_keep)
                 
     
+    def update_path(self, path):
+        self.path = path
+        self.name = path.split(os.sep)[-1].removesuffix(".pkl")
+
+    
     def save_to_disk(self, filename):
         '''
         Pickle dumps the object to the filename.
@@ -620,6 +677,8 @@ class MeshCompleteInfo:
         '''
         with open(filename, "wb") as f:
             pickle.dump(self, f, -1)
+
+        self.update_path(filename)
 
 
     def plot_mesh(self, 
@@ -643,17 +702,18 @@ class MeshCompleteInfo:
         if self.vertex_labels is not None:
             vertex_pyv_mesh = toughio.from_meshio(self.mesh).to_pyvista()
 
-        if self.face_center_labels is not None:
-            face_list_for_pyvista = np.concatenate(
+        face_list_for_pyvista = np.concatenate(
                 [[len(v), *v] for v in self.vertices_in_faces]
             )
-            facetype_list_for_pyvista = [pyvista.CellType.LINE for _ in self.vertices_in_faces]
+        facetype_list_for_pyvista = [pyvista.CellType.LINE for _ in self.vertices_in_faces]
 
-            face_pyv_mesh = pyvista.UnstructuredGrid(
-                                face_list_for_pyvista,
-                                facetype_list_for_pyvista,
-                                self.mesh.points
-                            )
+        face_pyv_mesh = pyvista.UnstructuredGrid(
+                            face_list_for_pyvista,
+                            facetype_list_for_pyvista,
+                            self.mesh.points
+                        )
+        
+        if self.face_center_labels is not None:
             
             cell_list_for_pyvista = np.concatenate(
                         [[len(v), *v] for v in self.vertices_in_cells]

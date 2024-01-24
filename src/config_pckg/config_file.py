@@ -22,6 +22,9 @@ class Config():
         self.EXTERNAL_FOLDER_MSH = os.path.join(self.EXTERNAL_FOLDER, "Mesh_ascii")
         self.EXTERNAL_FOLDER_CSV = os.path.join(self.EXTERNAL_FOLDER, "CSV_ascii")
         self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
+        self.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjsWithLabels_at300")
+
+        self.problematic_files = ["2dtc_002R074_001_s01"]
 
         with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "hyperparams.yaml"), "r") as stream:
             try:
@@ -38,7 +41,7 @@ class Config():
                 raise NotImplementedError()
 
         self.dim = 2
-        self.epsilon_for_point_matching = 1e-5
+        self.epsilon_for_point_matching = 1e-4
         self.mesh_to_features_scale_factor = 1e-3
         self.labels_for_which_element: Literal["points", "faces"] = "faces"
 

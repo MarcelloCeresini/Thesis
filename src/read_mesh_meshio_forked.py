@@ -351,7 +351,7 @@ def read(filename):  # noqa: C901
     field_data = {}
     cell_data = {}
     point_data = {}
-    info = {"global":{}, "zone_id_list_cellblocks":[], "elements":{}}
+    info = {"global":{}, "zone_id_list_cellblocks":[], "elements":{}, "cell_type_cumulative":[]}
 
     points = []
     cells = []
@@ -409,9 +409,9 @@ def read(filename):  # noqa: C901
                     if key == "mixed":
                         info["elements"][data["zone_id"]] = {
                             "elem_type": "cell_type_definition",
-                            "cell_type_cumulative": data["data"],
+                            "cell_type_cumulative": data["data"], # TODO: remove this
                         }
-                        # info["zone_id_list"].append(data["zone_id"])
+                        info["cell_type_cumulative"].append(data["data"])
                     else:
                         cells.append((key, data))
 
@@ -449,7 +449,7 @@ def read(filename):  # noqa: C901
                     warn("Zone specification not supported yet.")
 
             else:
-                warn(f"Unknown index {index}. Skipping.")
+                # warn(f"Unknown index {index}. Skipping.")
                 # Skipping ahead to the next line with two closing brackets.
                 _skip_close(f, line.count("(") - line.count(")"))
 
