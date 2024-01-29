@@ -321,7 +321,8 @@ def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in
 
     face_spatial_dir = [point_positions[v[1]]-point_positions[v[0]] for v in vertices_in_faces]
     face_spatial_dir_norm = np.array([vec/np.linalg.norm(vec) for vec in face_spatial_dir])
-    # face tangent versor components
+
+    # face tangent versor components (x, y)
     face_center_attr_BC[:,:2] = face_spatial_dir_norm[:,:2]
     face_center_attr_BC_mask[:,:2] = True
 
@@ -346,14 +347,39 @@ def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in
             case 2: # interior, no condition
                 pass
             case 3: # wall, speed fixed depending on the name
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = True
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = True
+
                 if "ground" in name: # same tangential velocity as the air entering the domain
-                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed
+                    direction = face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["tangent_versor_x"]]
+                    if conf.flag_directional_BC_velocity:
+                        face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed * np.sign(direction)
+                    else:
+                        face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed
+
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
+
                 elif "tyre" in name: # in 2D, it rotates around the center with angular speed omega
                     Cx, Cy, R, sigma = hyperLSQ(points_of_faceblock_positions[:,:2])
                     omega = conf.air_speed / R
-                    v_t = np.linalg.norm(face_center_positions[faces_of_faceblock_idxs][:,:2]-[Cx, Cy], axis=1) * omega # v_t = omega * r
+                    rays = face_center_positions[faces_of_faceblock_idxs][:,:2] - [Cx, Cy]
+                    direction = np.cross(face_center_attr_BC[faces_of_faceblock_idxs,:2], rays)
+
+                    if conf.flag_directional_BC_velocity:
+                        v_t = np.linalg.norm(rays, axis=1) * omega * np.sign(direction) # v_t = r * omega
+                    else:
+                        v_t = np.linalg.norm(rays, axis=1) * omega
+
                     # TODO: do we add a np.dot(v_t, face_spatial_dir_norm[:,:2]) to only get the component really tangent?
+                    ### OSS: mean angle deviation is ~ 0.00116
+                    # v_t_directional = np.cross([0,0,-omega], rays)[:,:2]
+                    # v_t_versor = np.array([v/np.linalg.norm(v) for v in v_t_directional])
+                    # face_versor = face_spatial_dir_norm[faces_of_faceblock_idxs][:,:2]
+                    # right_direction_face_versor = np.array([f*s for f,s in zip(face_versor, np.sign(direction))])
+                    # dot_products_v_f = [np.dot(f,v) for f, v in zip(right_direction_face_versor, v_t_versor)]
+                    # error_in_angle = [np.arccos(d) for d in dot_products_v_f]
                     
                     face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = v_t
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
@@ -365,22 +391,25 @@ def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in
             case 5: # pressure-outlet
                 face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = conf.atmosferic_pressure
                 face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = True
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_dn"]] = 0
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_dn"]] = True
             case 7: # simmetry, normal derivative = 0
-                # TODO: is this right? both v_t and v_n normal derivatives should be zero?
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_t_dt"]] = 0
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_t_dt"]] = True
-
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_n_dt"]] = 0
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_n_dt"]] = True
+                pass
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = True
+                
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = True
             case 10: # velocity_inlet
                 inlet_points.append(points_of_faceblock_positions)
-                # TODO: is this right? should v_normal be =0?
-                # TODO: is it the opposite? or is it independent of the direction of the face and it should be v_x fixed and v_y = 0?
+                # TODO: dp_dn = 0
                 face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
                 face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
-                # TODO: should i check the direction of the face before giving the value?
                 face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = conf.air_speed
                 face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = True
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = True
+
             case _:
                 raise NotImplementedError("Didn't implement this kind of BC yet")
             
@@ -451,6 +480,7 @@ def get_labels(positions, csv_filename, conf, check_biunivocity):
     else:
         raise NotImplementedError("Not implemented for 3d")
     
+
 def convert_msh_to_mesh_complete_info_obj(
         conf: Config,
         filename_input_msh,
@@ -493,6 +523,7 @@ def convert_mesh_complete_info_obj_to_graph(
         meshCI, # MeshCompleteInfo object
         complex_graph=False,
         filename_output_graph=None, 
+        normalize=True
         ):
     
     '''Given a MeshCompleteInfo instance, returns a graph and saves it to memory'''
@@ -502,15 +533,20 @@ def convert_mesh_complete_info_obj_to_graph(
     if not complex_graph:
         if conf.dim == 2:
             graph_nodes_positions = meshCI.face_center_positions
-            FcFc_edges_bidir = np.concatenate([meshCI.FcFc_edges, np.flip(meshCI.FcFc_edges, axis=1)], axis=0)
-            graph_edges = FcFc_edges_bidir
             graph_node_attr = meshCI.face_center_features
             graph_node_attr_mask = meshCI.face_center_ord_features_mask
+
+            FcFc_edges_bidir = np.concatenate([meshCI.FcFc_edges, np.flip(meshCI.FcFc_edges, axis=1)], axis=0)
+            graph_edges = FcFc_edges_bidir
+            
+            graph_edge_relative_displacement_vector = np.array([graph_nodes_positions[p2]-graph_nodes_positions[p1] for (p1, p2) in graph_edges])
+            graph_edge_norm = np.expand_dims(np.linalg.norm(graph_edge_relative_displacement_vector, axis=1), axis=1)
+            graph_edge_attr = np.concatenate([graph_edge_relative_displacement_vector, graph_edge_norm], axis=1)
 
             data = Data(
                 edge_index=torch.tensor(graph_edges).t().contiguous(), 
                 pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
-                # edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
+                edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
                 x=torch.tensor(graph_node_attr, dtype=torch.float32),
                 y=None
             )
@@ -648,7 +684,8 @@ class MeshCompleteInfo:
                     labels_csv_filename, 
                     self.conf, 
                     check_biunivocity=True)
-                
+
+
     def add_labels_from_graph(self, data: Data, which_element_has_labels: Literal["vertex", "face", "cell"]):
         match which_element_has_labels:
             case "vertex":
@@ -661,7 +698,7 @@ class MeshCompleteInfo:
                 assert data.y.shape[0] == self.cell_center_positions.shape[0], f"Data label shape {data.y.shape} does not match number of cells in mesh {self.cell_center_positions.shape[0]}"
                 self.cell_center_labels = pd.DataFrame(data.y, columns=self.conf.features_to_keep)
                 
-    
+
     def update_path(self, path):
         self.path = path
         self.name = path.split(os.sep)[-1].removesuffix(".pkl")
