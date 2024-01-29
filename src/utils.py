@@ -518,12 +518,65 @@ def convert_msh_to_mesh_complete_info_obj(
     return mesh_complete_instance
 
 
+def normalize_features(features, conf):
+    match conf.feature_normalization_mode:
+        case "None":
+            return features
+        case "Z-Normalization":
+            features[conf.graph_node_feature_dict["v_t"]] /= conf.air_speed
+            features[conf.graph_node_feature_dict["v_n"]] /= conf.air_speed
+            features[conf.graph_node_feature_dict["p"]] /= (conf.air_speed**2)/2
+            return features
+        case _:
+            raise NotImplementedError("Only implemented 'None' and 'Z-Normalization'")
+
+
+def normalize_labels(labels, conf):
+    v_mag = np.linalg.norm(labels[["x-velocity", "y-velocity"]], axis=1)
+
+    if conf.label_normalization_mode["graph_wise"]:
+        v_mag_mean, v_mag_std = v_mag.mean(), v_mag.std()
+        vx_mean, vx_std = labels["x-velocity"].mean(), labels["x-velocity"].std()
+        vy_mean, vy_std = labels["y-velocity"].mean(), labels["y-velocity"].std()
+        p_mean, p_std = labels["pressure"].mean(), labels["pressure"].std()
+    else: # else it is dataset_wise
+        v_mag_mean, v_mag_std = conf.train_set_normalization_constants["v_mag_mean"], conf.train_set_normalization_constants["v_mag_std"]
+        vx_mean, vx_std = conf.train_set_normalization_constants["vx_mean"], conf.train_set_normalization_constants["vx_std"]
+        vy_mean, vy_std = conf.train_set_normalization_constants["vy_mean"], conf.train_set_normalization_constants["vy_std"]
+        p_mean, p_std = conf.train_set_normalization_constants["p_mean"], conf.train_set_normalization_constants["p_std"]
+
+    if conf.label_normalization_mode["no_shift"]:
+        v_mag_mean = 0
+        vx_mean = 0
+        vy_mean = 0
+        p_mean = 0
+
+    match conf.label_normalization_mode["main"]:
+        case "None":
+            return labels
+        case "Z-Normalization":
+            labels["pressure"] = (labels["pressure"]-p_mean)/p_std
+            match conf.label_normalization_mode["velocity_mode"]:
+                case "component_wise":
+                    labels["x-velocity"] = (labels["x-velocity"]-vx_mean)/vx_std
+                    labels["y-velocity"] = (labels["y-velocity"]-vy_mean)/vy_std
+                    return labels
+                case "magnitude_wise":
+                    v_mag_norm = (v_mag-v_mag_mean)/v_mag_std
+                    labels["x-velocity"] = (labels["x-velocity"]/v_mag)*v_mag_norm    # inside parentheses it becomes "versor component", then you renormalize it with the product
+                    labels["y-velocity"] = (labels["y-velocity"]/v_mag)*v_mag_norm
+                case _:
+                    raise NotImplementedError()
+            return labels
+        case _:
+            raise NotImplementedError()
+
+
 def convert_mesh_complete_info_obj_to_graph(
         conf:Config,
         meshCI, # MeshCompleteInfo object
         complex_graph=False,
         filename_output_graph=None, 
-        normalize=True
         ):
     
     '''Given a MeshCompleteInfo instance, returns a graph and saves it to memory'''
@@ -532,13 +585,14 @@ def convert_mesh_complete_info_obj_to_graph(
 
     if not complex_graph:
         if conf.dim == 2:
-            graph_nodes_positions = meshCI.face_center_positions
-            graph_node_attr = meshCI.face_center_features
+            graph_nodes_positions = meshCI.face_center_positions # not used because not relative
+
+            graph_node_attr = normalize_features(meshCI.face_center_features, conf)
             graph_node_attr_mask = meshCI.face_center_ord_features_mask
 
             FcFc_edges_bidir = np.concatenate([meshCI.FcFc_edges, np.flip(meshCI.FcFc_edges, axis=1)], axis=0)
             graph_edges = FcFc_edges_bidir
-            
+
             graph_edge_relative_displacement_vector = np.array([graph_nodes_positions[p2]-graph_nodes_positions[p1] for (p1, p2) in graph_edges])
             graph_edge_norm = np.expand_dims(np.linalg.norm(graph_edge_relative_displacement_vector, axis=1), axis=1)
             graph_edge_attr = np.concatenate([graph_edge_relative_displacement_vector, graph_edge_norm], axis=1)
@@ -557,14 +611,15 @@ def convert_mesh_complete_info_obj_to_graph(
             data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
             face_label_dim = len(conf.features_to_keep)
 
-            data.y = torch.tensor(meshCI.face_center_labels.values, dtype=torch.float32)
+            tmp = normalize_labels(meshCI.face_center_labels, conf)
+            data.y = torch.tensor(tmp[conf.labels_to_keep_for_training].values, dtype=torch.float32)
             # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
 
         else:
             raise NotImplementedError("Implement dim = 3")
     else:
+        raise NotImplementedError("Still many things to do")
         if conf.dim == 2:
-            
             graph_nodes_positions = np.concatenate([meshCI.cell_center_positions, meshCI.face_center_positions])
 
             # shift face indices
@@ -639,7 +694,7 @@ class MeshCompleteInfo:
             FcFc_edges, 
             vertices_in_faces,
             CcFc_edges,
-                 ) -> None:
+    ) -> None:
         self.conf = conf
         self.path = path
         self.name = path.split(os.sep)[-1].removesuffix(".pkl")
@@ -714,7 +769,7 @@ class MeshCompleteInfo:
         '''
         with open(filename, "wb") as f:
             pickle.dump(self, f, -1)
-
+        
         self.update_path(filename)
 
 

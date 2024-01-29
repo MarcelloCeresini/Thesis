@@ -68,6 +68,12 @@ class Config():
             'turb-kinetic-energy',
         ]
 
+        self.labels_to_keep_for_training = [
+            'x-velocity',
+            'y-velocity',
+            'pressure',
+        ]
+
         self.csv_features = self.features_to_keep + self.features_coordinates + self.features_to_remove
 
         self.active_vectors_2d = ['x-velocity', 'y-velocity']
@@ -130,6 +136,25 @@ class Config():
         }
 
         self.flag_directional_BC_velocity = True
+
+        self.label_normalization_mode = {
+            "main": "Z-Normalization",                  # "None" or "Z-Normalization"
+            "velocity_mode": "magnitude_wise",          # "component_wise" or "magnitude_wise"
+            "graph_wise": False,                        # True = dataset wise
+            "no_shift": True,                           # True = only rescales, doesn't shift values
+        }
+
+        # TODO: compute and fill these values (maybe in a file?)
+        self.train_set_normalization_constants = {      # these are macro-averages
+            "v_mag_mean": 0,
+            "v_mag_std": 0,
+            "vx_mean": 0,
+            "vx_std": 0,
+            "vy_mean": 0,
+            "vy_std": 0,
+            "p_mean": 0,
+            "p_std": 0,
+        }
 
 
     def get_wandb_logging_info(self) -> Dict:
