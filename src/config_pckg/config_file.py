@@ -1,9 +1,13 @@
+from copy import deepcopy
 from enum import Enum
 import os
+import pickle
 from typing import Annotated, Dict, Literal, Optional, TypedDict, Union
 
 import yaml
 from pyvista import CellType 
+from torchmetrics import MeanAbsolutePercentageError, WeightedMeanAbsolutePercentageError, \
+    SymmetricMeanAbsolutePercentageError, RelativeSquaredError # TODO: investigate in correlation coefficients etc...
 
 class Config():
 
@@ -23,6 +27,7 @@ class Config():
         self.EXTERNAL_FOLDER_CSV = os.path.join(self.EXTERNAL_FOLDER, "CSV_ascii")
         self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
         self.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjsWithLabels_at300")
+        self.EXTERNAL_FOLDER_GRAPHS = os.path.join(self.EXTERNAL_FOLDER, "Graphs")
 
         self.problematic_files = ["2dtc_002R074_001_s01"]
 
@@ -31,8 +36,6 @@ class Config():
                 self.hyper_params = yaml.safe_load(stream)
             except yaml.YAMLError as exc:
                 print(exc)
-
-        
 
         match mode:
             case None:
@@ -137,24 +140,46 @@ class Config():
 
         self.flag_directional_BC_velocity = True
 
+        self.feature_normalization_mode = "Physical"
+
         self.label_normalization_mode = {
-            "main": "Z-Normalization",                  # "None" or "Z-Normalization"
-            "velocity_mode": "magnitude_wise",          # "component_wise" or "magnitude_wise"
+            "main": "Physical",                         # "None" or "Z-Normalization"
+            "velocity_mode": "magnitude_wise",          # "component_wise" or "magnitude_wise" (only needed if Z-norm is chosen)
             "graph_wise": False,                        # True = dataset wise
             "no_shift": True,                           # True = only rescales, doesn't shift values
         }
 
         # TODO: compute and fill these values (maybe in a file?)
+        with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "dataset_label_stats.pkl"), "rb") as f:
+            dataset_label_stats = pickle.load(f)
+        
         self.train_set_normalization_constants = {      # these are macro-averages
-            "v_mag_mean": 0,
-            "v_mag_std": 0,
-            "vx_mean": 0,
-            "vx_std": 0,
-            "vy_mean": 0,
-            "vy_std": 0,
-            "p_mean": 0,
-            "p_std": 0,
+            "vx_mean": dataset_label_stats["mean"]["x-velocity"], # 0 is train split
+            "vx_std": dataset_label_stats["std"]["x-velocity"],
+            "vy_mean": dataset_label_stats["mean"]["y-velocity"],
+            "vy_std": dataset_label_stats["std"]["x-velocity"],
+            "p_mean": dataset_label_stats["mean"]["pressure"],
+            "p_std": dataset_label_stats["std"]["pressure"],
+            "v_mag_mean": dataset_label_stats["mean"]["v_mag"],
+            "v_mag_std": dataset_label_stats["std"]["v_mag"],
         }
+
+        with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "splits.pkl"), "rb") as f:
+            self.split_idxs = pickle.load(f)
+
+        self.metrics = {
+            "MAPR": MeanAbsolutePercentageError(), 
+            "wMAPR": WeightedMeanAbsolutePercentageError(), 
+            "SMAPE": SymmetricMeanAbsolutePercentageError(), 
+            "RSE": RelativeSquaredError()
+        }
+
+        self.metric_dict = {
+            metric_name:{
+                label_name : deepcopy(metric_obj) for label_name in self.labels_to_keep_for_training
+            }
+            for metric_name, metric_obj in self.metrics.items()}
+        # TODO: implement global metrics
 
 
     def get_wandb_logging_info(self) -> Dict:

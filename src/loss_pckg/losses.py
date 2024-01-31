@@ -1,9 +1,10 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 
-import torch as T
+import torch
+import torch.nn.functional as F
 
 from config_pckg.config_file import Config
 
 
-def loss(pred, label, conf: Config) -> Dict[str, T.float]:
-    pass
+def MSE_loss(pred:torch.Tensor, label:torch.Tensor):
+    return F.mse_loss(pred, label, reduction="mean")

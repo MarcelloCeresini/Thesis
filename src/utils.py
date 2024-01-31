@@ -522,19 +522,22 @@ def normalize_features(features, conf):
     match conf.feature_normalization_mode:
         case "None":
             return features
-        case "Z-Normalization":
+        case "Physical":
             features[conf.graph_node_feature_dict["v_t"]] /= conf.air_speed
             features[conf.graph_node_feature_dict["v_n"]] /= conf.air_speed
             features[conf.graph_node_feature_dict["p"]] /= (conf.air_speed**2)/2
             return features
         case _:
-            raise NotImplementedError("Only implemented 'None' and 'Z-Normalization'")
+            raise NotImplementedError("Only implemented 'None' and 'Physical'")
 
 
-def normalize_labels(labels, conf):
+def normalize_labels(labels, conf_dict, conf):
+    labels = labels.copy()
+    # TODO: to use v_mag correctly, we should compute v_mag POINTWISE and then aggregate
+    # instead here we compute mean of x-v and y-v for each graph, then compute v_mag as norm (graph-wise)
     v_mag = np.linalg.norm(labels[["x-velocity", "y-velocity"]], axis=1)
 
-    if conf.label_normalization_mode["graph_wise"]:
+    if conf_dict["graph_wise"]:
         v_mag_mean, v_mag_std = v_mag.mean(), v_mag.std()
         vx_mean, vx_std = labels["x-velocity"].mean(), labels["x-velocity"].std()
         vy_mean, vy_std = labels["y-velocity"].mean(), labels["y-velocity"].std()
@@ -545,18 +548,18 @@ def normalize_labels(labels, conf):
         vy_mean, vy_std = conf.train_set_normalization_constants["vy_mean"], conf.train_set_normalization_constants["vy_std"]
         p_mean, p_std = conf.train_set_normalization_constants["p_mean"], conf.train_set_normalization_constants["p_std"]
 
-    if conf.label_normalization_mode["no_shift"]:
+    if conf_dict["no_shift"]:
         v_mag_mean = 0
         vx_mean = 0
         vy_mean = 0
         p_mean = 0
 
-    match conf.label_normalization_mode["main"]:
+    match conf_dict["main"]:
         case "None":
             return labels
         case "Z-Normalization":
             labels["pressure"] = (labels["pressure"]-p_mean)/p_std
-            match conf.label_normalization_mode["velocity_mode"]:
+            match conf_dict["velocity_mode"]:
                 case "component_wise":
                     labels["x-velocity"] = (labels["x-velocity"]-vx_mean)/vx_std
                     labels["y-velocity"] = (labels["y-velocity"]-vy_mean)/vy_std
@@ -567,6 +570,10 @@ def normalize_labels(labels, conf):
                     labels["y-velocity"] = (labels["y-velocity"]/v_mag)*v_mag_norm
                 case _:
                     raise NotImplementedError()
+            return labels
+        case "Physical":
+            labels[["x-velocity", "y-velocity"]] /= conf.air_speed
+            labels["pressure"] /= (conf.air_speed**2)/2
             return labels
         case _:
             raise NotImplementedError()
@@ -611,7 +618,7 @@ def convert_mesh_complete_info_obj_to_graph(
             data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
             face_label_dim = len(conf.features_to_keep)
 
-            tmp = normalize_labels(meshCI.face_center_labels, conf)
+            tmp = normalize_labels(meshCI.face_center_labels, conf.label_normalization_mode, conf)
             data.y = torch.tensor(tmp[conf.labels_to_keep_for_training].values, dtype=torch.float32)
             # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
 
