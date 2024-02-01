@@ -579,6 +579,24 @@ def normalize_labels(labels, conf_dict, conf):
             raise NotImplementedError()
 
 
+def denormalize_labels(labels, conf):
+    '''
+    Only implemented for physical normalization for now
+    '''
+    labels[:,:2] *= conf.air_speed          # x-velocity and y-velocity
+    labels[:,2] *= (conf.air_speed**2)/2    # pressure
+    return labels
+
+
+def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf):
+    with open(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, data.name+".pkl"), "rb") as f:
+        meshCI = pickle.load(f)
+        
+    print(f"Plotting {meshCI.name}")
+    pred = denormalize_labels(pred, conf)
+    meshCI.plot_mesh(labels=pred)
+
+
 def convert_mesh_complete_info_obj_to_graph(
         conf:Config,
         meshCI, # MeshCompleteInfo object
@@ -611,7 +629,10 @@ def convert_mesh_complete_info_obj_to_graph(
                 x=torch.tensor(graph_node_attr, dtype=torch.float32),
                 y=None
             )
-
+            data.name = meshCI.name
+            data.meshComplete_corresponding_path = meshCI.path
+            
+            
             data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
 
             data.n_faces = torch.tensor(meshCI.face_center_positions.shape[0])
@@ -782,6 +803,7 @@ class MeshCompleteInfo:
 
     def plot_mesh(self, 
                   what_to_plot = None,
+                  labels: Optional[torch.Tensor] = None,
                   ):
         '''
         what_to_plot whould be a list of tuples (tup[0], tup[1], tup[2], tup[3]):
@@ -795,7 +817,7 @@ class MeshCompleteInfo:
                 - additional special value "streamlines" in case --> ("cell", "label", "velocity") --> automatically add streamlines
         '''
         assert self.conf.dim == 2, "Implement dim = 3"
-
+        assert (what_to_plot is not None) or (labels is not None), "Nothing to plot specified"
         # TODO: should we create permanent objects to avoid recomputation?
 
         if self.vertex_labels is not None:
@@ -826,85 +848,127 @@ class MeshCompleteInfo:
                 self.mesh.points,
             )
 
-            faces_in_cells = pd.DataFrame(data=self.CcFc_edges, columns=["cell_idx", "face_idx"]).groupby("cell_idx")["face_idx"].apply(list)
+            self.faces_in_cells = pd.DataFrame(data=self.CcFc_edges, columns=["cell_idx", "face_idx"]).groupby("cell_idx")["face_idx"].apply(list)
             # TODO: improve from mean to weighted avg depending on distance
             self.cell_center_labels = pd.DataFrame(
-                [np.mean(self.face_center_labels.iloc[faces_idx], axis=0) for faces_idx in faces_in_cells]
+                [np.mean(self.face_center_labels.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
             )
 
-        for tup in what_to_plot:
-            match tup[0]:
-                case "vertex":
-                    assert self.vertex_labels is not None, "You did not use 'add_labels' with mode='vertex' on this mesh, no labels present for vertices"
-                    assert tup[1] == "label", "Points do not have features (they only have LABELS)"
-                    vertex_pyv_mesh.point_data[tup[2]] = self.vertex_labels[tup[2]]
-                    
-                    pl = pyvista.Plotter()
-                    pl.add_mesh(vertex_pyv_mesh, scalars=tup[2], lighting=False,
-                                scalar_bar_args={"title":tup[2]}, cmap="Spectral")
-                    pl.camera_position = "xy"
-                    pl.enable_anti_aliasing()
-                    pl.show()
+        if labels is not None:
+            pl = pyvista.Plotter(shape=(3, 3))
+            # columns = self.conf.labels_to_keep_for_training # TODO: update all MeshComplete files from scratch
+            columns = ['x-velocity', 'y-velocity', 'pressure']
+            face_label_df = pd.DataFrame(labels, columns=columns)
+            cell_pred_lables = pd.DataFrame(
+                [np.mean(face_label_df.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
+            )
 
-                case "face":
-                    if tup[1] == "label":
-                        assert self.face_center_labels is not None, "You did not use 'add_labels' with mode='element' on this mesh, no labels present for faces or cells"
-                        face_pyv_mesh.cell_data[tup[2]] = self.face_center_labels[tup[2]]
-                    elif tup[1] == "feature":
-                        face_pyv_mesh.cell_data[tup[2]] = self.face_center_features[:,self.conf.graph_node_feature_dict[tup[2]]]
-                    else:
-                        raise ValueError(f"tup[1] can be only 'label' or 'feature', you wrote {tup[1]}")
-                    
-                    pl = pyvista.Plotter()
-                    pl.add_mesh(face_pyv_mesh, scalars=tup[2], lighting=False,
-                                scalar_bar_args={"title":tup[2]}, cmap="Spectral")
-                    pl.camera_position = "xy"
-                    pl.enable_anti_aliasing()
-                    pl.show()
+            for i, lab in enumerate(columns):
+                cell_pyv_mesh.cell_data[lab] = self.cell_center_labels[lab]
+                cell_pyv_mesh.cell_data[lab+"_pred"] = cell_pred_lables[lab]
+                cell_pyv_mesh.cell_data[lab+"_diff"] = self.cell_center_labels[lab] - cell_pred_lables[lab]
 
-                case "cell":
-                    
-                    assert tup[1] == "label", "Cells do not have features (they only have LABELS)"
-                    assert self.face_center_labels is not None, "You did not use 'add_labels' with mode='element' on this mesh, no labels present for faces or cells"
-                    
-                    if not tup[2] == "streamlines":
-                        # TODO: implement velocity magnitude if needed
-                        cell_pyv_mesh.cell_data[tup[2]] = self.cell_center_labels[tup[2]]
+            for i, lab in enumerate(columns):
+                pl.subplot(0,i)
+                pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab, 
+                    lighting=False, 
+                    scalar_bar_args={"title":f"GT_{lab}"},
+                    cmap="Spectral")
+                pl.camera_position = "xy"
+
+                pl.subplot(1,i)
+                pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_pred", 
+                    lighting=False, 
+                    scalar_bar_args={"title":f"PRED_{lab}"}, 
+                    cmap="Spectral")
+                pl.camera_position = "xy"
+
+                pl.subplot(2,i)
+                pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_diff", 
+                    lighting=False, 
+                    scalar_bar_args={"title":f"DIFF_{lab}"}, 
+                    cmap="Spectral")
+                pl.camera_position = "xy"
+            
+            pl.link_views()
+            # pl.enable_anti_aliasing() # BREAKS EVERYTHING do NOT use
+            pl.show()
+            print("done")
+
+        else:
+            for tup in what_to_plot:
+                match tup[0]:
+                    case "vertex":
+                        assert self.vertex_labels is not None, "You did not use 'add_labels' with mode='vertex' on this mesh, no labels present for vertices"
+                        assert tup[1] == "label", "Points do not have features (they only have LABELS)"
+                        vertex_pyv_mesh.point_data[tup[2]] = self.vertex_labels[tup[2]]
                         
                         pl = pyvista.Plotter()
-                        pl.add_mesh(cell_pyv_mesh, scalars=tup[2], lighting=False,
+                        pl.add_mesh(vertex_pyv_mesh, scalars=tup[2], lighting=False,
                                     scalar_bar_args={"title":tup[2]}, cmap="Spectral")
                         pl.camera_position = "xy"
                         pl.enable_anti_aliasing()
                         pl.show()
-                    else:
-                        raise NotImplementedError("Streamlines still not working")
-                        velocity = np.concatenate([
-                            self.cell_center_labels[self.conf.active_vectors_2d].to_numpy(),
-                            np.zeros([len(self.cell_center_labels),1])], 
-                        axis=1)
-                        cell_pyv_mesh.cell_data["velocity"] = velocity
-                        cell_pyv_mesh.set_active_vectors("velocity", preference="cell")
 
-                        lines = cell_pyv_mesh.streamlines_from_source(
-                            source=pyvista.PointSet(self.inlet_points_positions),
-                            vectors="velocity",
-                        )
-
+                    case "face":
+                        if tup[1] == "label":
+                            assert self.face_center_labels is not None, "You did not use 'add_labels' with mode='element' on this mesh, no labels present for faces or cells"
+                            face_pyv_mesh.cell_data[tup[2]] = self.face_center_labels[tup[2]]
+                        elif tup[1] == "feature":
+                            face_pyv_mesh.cell_data[tup[2]] = self.face_center_features[:,self.conf.graph_node_feature_dict[tup[2]]]
+                        else:
+                            raise ValueError(f"tup[1] can be only 'label' or 'feature', you wrote {tup[1]}")
+                        
                         pl = pyvista.Plotter()
-                        pl.add_mesh(
-                            lines,
-                            render_lines_as_tubes=True,
-                            line_width=5,
-                            lighting=False,
-                        )
-                        pl.add_mesh(
-                            cell_pyv_mesh, 
-                            scalars="velocity", 
-                            lighting=False,
-                            cmap="Spectral", 
-                            opacity=0.3
-                        )
+                        pl.add_mesh(face_pyv_mesh, scalars=tup[2], lighting=False,
+                                    scalar_bar_args={"title":tup[2]}, cmap="Spectral")
                         pl.camera_position = "xy"
                         pl.enable_anti_aliasing()
                         pl.show()
+
+                    case "cell":
+                        
+                        assert tup[1] == "label", "Cells do not have features (they only have LABELS)"
+                        assert self.face_center_labels is not None, "You did not use 'add_labels' with mode='element' on this mesh, no labels present for faces or cells"
+                        
+                        if not tup[2] == "streamlines":
+                            # TODO: implement velocity magnitude if needed
+                            cell_pyv_mesh.cell_data[tup[2]] = self.cell_center_labels[tup[2]]
+                            
+                            pl = pyvista.Plotter()
+                            pl.add_mesh(cell_pyv_mesh, scalars=tup[2], lighting=False,
+                                        scalar_bar_args={"title":tup[2]}, cmap="Spectral")
+                            pl.camera_position = "xy"
+                            pl.enable_anti_aliasing()
+                            pl.show()
+                        else:
+                            raise NotImplementedError("Streamlines still not working")
+                            velocity = np.concatenate([
+                                self.cell_center_labels[self.conf.active_vectors_2d].to_numpy(),
+                                np.zeros([len(self.cell_center_labels),1])], 
+                            axis=1)
+                            cell_pyv_mesh.cell_data["velocity"] = velocity
+                            cell_pyv_mesh.set_active_vectors("velocity", preference="cell")
+
+                            lines = cell_pyv_mesh.streamlines_from_source(
+                                source=pyvista.PointSet(self.inlet_points_positions),
+                                vectors="velocity",
+                            )
+
+                            pl = pyvista.Plotter()
+                            pl.add_mesh(
+                                lines,
+                                render_lines_as_tubes=True,
+                                line_width=5,
+                                lighting=False,
+                            )
+                            pl.add_mesh(
+                                cell_pyv_mesh, 
+                                scalars="velocity", 
+                                lighting=False,
+                                cmap="Spectral", 
+                                opacity=0.3
+                            )
+                            pl.camera_position = "xy"
+                            pl.enable_anti_aliasing()
+                            pl.show()

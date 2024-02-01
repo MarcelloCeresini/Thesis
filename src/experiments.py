@@ -2,40 +2,41 @@ import glob
 import os
 import pickle
 import utils
+from tqdm import tqdm
+
+import torch
+from torch_geometric.data import Data
+# import torchinfo
+from torch_geometric.nn import summary
 
 from config_pckg.config_file import Config
+from data_pipeline.data_loading import get_data_loaders
+from utils import convert_mesh_complete_info_obj_to_graph, plot_gt_pred_label_comparison
+from models.models import BaselineModel
 
 
 if __name__ == "__main__":
     conf = Config()
 
-    with open(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, "2dtc_002R002_001_s01.pkl"), "rb") as f:
-        obj = pickle.load(f)
+    print("Getting dataloaders")
+    train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
+        conf, load_from_disk=True)
 
-    # obj.plot_mesh([
-    #     ("cell", "label", "pressure")
-    # ])
+    # model = BaselineModel(conf)
+    # model.load_state_dict(torch.load(TODO:))
+    # model.eval()
+    
+    # for batch in test_dataloader:
+    #     pred_batch = model(batch)
+    #     for i in range(len(batch)):
+    #         data = batch[i]
+    #         pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
+    #         plot_gt_pred_label_comparison(data, pred, conf)
 
-    # data = utils.convert_mesh_complete_info_obj_to_graph(conf, obj)
-    # print(data)
-    # utils.get_face_BC_attributes(obj.mesh, obj.face_center_positions, obj.vertices_in_faces, conf)
-        
-    columns=["x-velocity", "y-velocity", "pressure"]
+    for batch in test_dataloader:
+        break
 
-    conf_dict = conf.label_normalization_mode
-
-    conf_dict1 = conf_dict.copy()
-    conf_dict1.update({"velocity_mode":"component_wise"})
-
-    conf_dict2 = conf_dict.copy()
-    conf_dict2.update({"main":"Physical"})
-
-    conf_dict3 = conf_dict.copy()
-    conf_dict3.update({"no_shift":False})
-
-    # labels = utils.normalize_labels(obj.face_center_labels, conf_dict, conf)
-    # labels1 = utils.normalize_labels(obj.face_center_labels, conf_dict1, conf)
-    # labels2 = utils.normalize_labels(obj.face_center_labels, conf_dict2, conf)
-    labels3 = utils.normalize_labels(obj.face_center_labels, conf_dict3, conf)
-
-    labels3.hist()
+    model = BaselineModel(conf.input_dim, conf.output_dim, conf.model_structure, conf)
+    description = summary(model, batch)
+    
+    print(description)

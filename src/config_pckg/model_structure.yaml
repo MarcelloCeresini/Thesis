@@ -1,0 +1,13 @@
+name: BaselineModel
+encoder:
+  name: Linear
+  repeats: 2
+  hidden_dim: 2
+message_passer:
+  name: GCNConv
+  repeats: 5
+  hidden_dim: 64
+decoder:
+  name: Linear
+  repeats: 2
+  hidden_dim: 32

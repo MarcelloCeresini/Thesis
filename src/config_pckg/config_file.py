@@ -6,7 +6,7 @@ from typing import Annotated, Dict, Literal, Optional, TypedDict, Union
 
 import yaml
 from pyvista import CellType 
-from torchmetrics import MeanAbsolutePercentageError, WeightedMeanAbsolutePercentageError, \
+from torchmetrics import MeanAbsoluteError, MeanAbsolutePercentageError, MeanSquaredError, PearsonCorrCoef, WeightedMeanAbsolutePercentageError, \
     SymmetricMeanAbsolutePercentageError, RelativeSquaredError # TODO: investigate in correlation coefficients etc...
 
 class Config():
@@ -28,12 +28,20 @@ class Config():
         self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
         self.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjsWithLabels_at300")
         self.EXTERNAL_FOLDER_GRAPHS = os.path.join(self.EXTERNAL_FOLDER, "Graphs")
+        self.standard_dataloader_path = os.path.join(self.DATA_DIR, "dataloaders.pt")
+
 
         self.problematic_files = ["2dtc_002R074_001_s01"]
 
         with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "hyperparams.yaml"), "r") as stream:
             try:
                 self.hyper_params = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                print(exc)
+
+        with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "model_structure.yaml"), "r") as stream:
+            try:
+                self.model_structure = yaml.safe_load(stream)
             except yaml.YAMLError as exc:
                 print(exc)
 
@@ -171,7 +179,10 @@ class Config():
             "MAPR": MeanAbsolutePercentageError(), 
             "wMAPR": WeightedMeanAbsolutePercentageError(), 
             "SMAPE": SymmetricMeanAbsolutePercentageError(), 
-            "RSE": RelativeSquaredError()
+            "RSE": RelativeSquaredError(),
+            "MSE": MeanSquaredError(), 
+            "MAE": MeanAbsoluteError(),
+            "Pearson": PearsonCorrCoef()
         }
 
         self.metric_dict = {
@@ -181,20 +192,25 @@ class Config():
             for metric_name, metric_obj in self.metrics.items()}
         # TODO: implement global metrics
 
+        # TODO: find another way to apply initial mask?
+        self.input_dim = (len(self.graph_node_feature_dict)-1)*2
+        self.output_dim = len(self.labels_to_keep_for_training)
 
-    def get_wandb_logging_info(self) -> Dict:
+    def get_tensorboard_logging_info(self) -> Dict:
         '''
         Return a Dict with the information for wandb logging and the hyperparameters that are important to log
         '''
+        logged_hyperparams = self.hyper_params
+        logged_hyperparams.update({
+            "input_dim": self.input_dim,
+            "output_dim": self.output_dim,
+        })
+
         return_dict = {
-            "project": self.PROJECT_NAME,
             "group": None,
-            "entity": None
+            "hyperparams": logged_hyperparams,
+            "model": self.model_structure,
         }
-
-        logged_hyperparams = {}
-
-        return_dict.update({"config":logged_hyperparams})
 
         return return_dict
     

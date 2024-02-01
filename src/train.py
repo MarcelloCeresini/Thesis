@@ -42,11 +42,11 @@ def compute_metric_results(metric_dict, conf):
     return metric_results
 
 
-def write_metric_results(metric_results, writer, epoch) -> None:
+def write_metric_results(metric_results, writer, epoch, split="val") -> None:
     # TODO: add also global writing when global is implemented
     for metric_name, metric_res_subdict in metric_results.items():
         for column, result in metric_res_subdict.items():
-            writer.add_scalar(f"{metric_name}/{column}", result, epoch)
+            writer.add_scalar(f"{metric_name}/{split}/{column}", result, epoch)
 
 
 def test(loader: pyg_data.DataLoader, model, conf):
@@ -56,7 +56,9 @@ def test(loader: pyg_data.DataLoader, model, conf):
         total_loss = 0
         model.eval()
         for batch in loader:
-            _, pred = model(batch)
+            input_to_model = batch.x, batch.x_mask, batch.edge_index, batch.edge_attr, batch.batch
+            pred = model(*input_to_model)
+            
             labels = clean_labels(batch, model.conf)
             loss = model.loss(pred, labels)
             total_loss += loss.item() * batch.num_graphs
@@ -69,6 +71,7 @@ def test(loader: pyg_data.DataLoader, model, conf):
 
 
 def train(
+        model,
         train_loader, 
         val_loader, 
         writer: SummaryWriter, 
@@ -77,14 +80,7 @@ def train(
     # with wandb.init(**conf.get_logging_info()):
 
     # TODO: change the name "features_to_keep" to "labels_to_keep"
-    model = BaselineModel(
-        input_dim=(len(conf.graph_node_feature_dict)-1)*2, 
-        hidden_dim=20, 
-        output_dim=len(conf.labels_to_keep_for_training),
-        conf=conf)
     
-    model.to(conf.device)
-
     # wandb.watch(
     #     model,
     #     log=conf.logging["model_log_mode"],
@@ -93,20 +89,28 @@ def train(
     # )
 
     opt = Adam(
-        params= model.parameters(),
-        lr= conf.hyper_params["training"]["lr"],
-        weight_decay=conf.hyper_params["training"]["weight_decay"],
+        params = model.parameters(),
+        lr = conf.hyper_params["training"]["lr"],
+        weight_decay = conf.hyper_params["training"]["weight_decay"],
     )
 
     # TODO: implement schedules
-    # scheduler = lr_scheduler.ReduceLROnPlateau(opt, patience=conf.hyper_params["training"]["patience_reduce_lr"])
+    scheduler = lr_scheduler.ReduceLROnPlateau(
+        optimizer=opt, 
+        patience=conf.hyper_params["training"]["patience_reduce_lr"],
+        min_lr=conf.hyper_params["training"]["min_lr"]
+    )
+    best_loss = 1000
+    last_best_epoch = 0
 
     for epoch in tqdm(range(conf.hyper_params["training"]["n_epochs"]), desc="Epoch", position=0):
         total_loss = 0
         model.train()
         for batch in tqdm(train_loader, leave=False, desc="Batch in epoch", position=1):
             opt.zero_grad()
-            _, pred = model(batch)
+            input_to_model = batch.x, batch.x_mask, batch.edge_index, batch.edge_attr, batch.batch
+            pred = model(*input_to_model)
+            # pred = model(batch)
             # FIXME: change masked tensor with manual mask (slow implementation by pytorch)
             labels = clean_labels(batch, model.conf)
             loss = model.loss(pred, labels)
@@ -117,11 +121,19 @@ def train(
             total_loss += loss.item() * batch.num_graphs
 
         total_loss /= len(train_loader.dataset)
-        writer.add_scalar("loss", total_loss, epoch)
+        writer.add_scalar("loss/train", total_loss, epoch)
 
         if epoch % conf.hyper_params["val"]["n_epochs_val"] == 0:
             val_loss, metric_results = test(val_loader, model, conf)
-            writer.add_scalar("val_loss", val_loss, epoch)
+
+            scheduler.step(val_loss)
+
+            # TODO: complete model checkpoins and "save best"
+            # if val_loss < best_loss:
+            #     best_loss = val_loss
+            #     model_save_path = os.path.join(conf.DATA_DIR, "model_checkpoints", f"{last_best_epoch}ckpt_{run_name}.pt")
+            #     torch.save(model.state_dict(), model_save_path)
+            writer.add_scalar("loss/val", val_loss, epoch)
             write_metric_results(metric_results, writer, epoch)
 
 
