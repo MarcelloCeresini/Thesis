@@ -51,33 +51,38 @@ def get_data_loaders(conf: Config, load_from_disk = False, save_to_disk = False)
     # TODO: implement transformation to add labels during loader creation
     # to avoid saving n different graphs for n different snapshots of the same simulation
 
-    loaders_found = False
+    data_found = False
     if load_from_disk:
-        if os.path.isfile(conf.standard_dataloader_path):
-            train_dataloader, val_dataloader, test_dataloader = torch.load(conf.standard_dataloader_path)
-            loaders_found = True
+        if os.path.isfile(conf.standard_datalist_path):
+            data_list_train, data_list_val, data_list_test = torch.load(conf.standard_datalist_path)
+            data_found = True
         else:
-            print("No dataloaders at standard path, creating them from scratch")
+            print("No datalist at standard path, creating them from scratch")
     
-    if (not load_from_disk) or (not loaders_found):
+    if (not load_from_disk) or (not data_found):
         data_filenames = sorted(glob.glob(pathname="*.pt", root_dir=conf.EXTERNAL_FOLDER_GRAPHS))
 
         data_list_train = [torch.load(os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, data_filenames[idx])) for idx in conf.split_idxs["train"]]
         data_list_val   = [torch.load(os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, data_filenames[idx])) for idx in conf.split_idxs["val"]]
         data_list_test  = [torch.load(os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, data_filenames[idx])) for idx in conf.split_idxs["test"]]
 
-        train_dataloader = DataLoader(data_list_train, 
-                                batch_size=conf.hyper_params["training"]["batch_size"],
-                                shuffle=True)
-        val_dataloader  = DataLoader(data_list_val,  
-                                batch_size=conf.hyper_params["val"]["batch_size"])
-        test_dataloader = DataLoader(data_list_test, 
-                                batch_size=1)
-    
     if save_to_disk:
         torch.save(
-            (train_dataloader, val_dataloader, test_dataloader),
-            conf.standard_dataloader_path
+            (data_list_train, data_list_val, data_list_test),
+            conf.standard_datalist_path
             )
+    
+    train_dataloader = DataLoader(data_list_train, 
+                            batch_size=conf.hyper_params["training"]["batch_size"],
+                            shuffle=True)
+    val_dataloader  = DataLoader(data_list_val,  
+                            batch_size=conf.hyper_params["val"]["batch_size"])
+    test_dataloader = DataLoader(data_list_test, 
+                            batch_size=1)
+    
+    for data in train_dataloader.dataset:
+        data.to(conf.device)
+    for data in val_dataloader.dataset:
+        data.to(conf.device)
 
     return train_dataloader, val_dataloader, test_dataloader

@@ -1,4 +1,5 @@
 from copy import deepcopy
+import os
 from typing import Literal
 from tqdm import tqdm
 
@@ -11,10 +12,8 @@ from torch.optim import Adam
 import torch.optim.lr_scheduler as lr_scheduler 
 from torch.masked import masked_tensor
 
-
-
+from utils import print_memory_state_gpu
 from config_pckg.config_file import Config 
-from models.models import BaselineModel
 
 
 def clean_labels(batch, conf: Config):
@@ -24,7 +23,7 @@ def clean_labels(batch, conf: Config):
             labels = torch.masked.masked_tensor(batch.y, batch.y_mask)
     else:
         labels = batch.y
-    return labels[:,:len(conf.labels_to_keep_for_training)]
+    return labels[:,:conf["hyperparams"]["label_dim"]]
 
 
 def forward_metric_results(preds, labels, conf, metric_dict):
@@ -62,7 +61,7 @@ def test(loader: pyg_data.DataLoader, model, conf):
             labels = clean_labels(batch, model.conf)
             loss = model.loss(pred, labels)
             total_loss += loss.item() * batch.num_graphs
-            metric_dict = forward_metric_results(pred, labels, conf, metric_dict)
+            metric_dict = forward_metric_results(pred.cpu(), labels.cpu(), conf, metric_dict)
 
         total_loss /= len(loader.dataset)
         metric_results = compute_metric_results(metric_dict, conf)
@@ -76,7 +75,8 @@ def train(
         val_loader, 
         writer: SummaryWriter, 
         conf: Config):
-
+    run_name = os.path.basename(os.path.normpath(writer.get_logdir()))
+    os.mkdir(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name))
     # with wandb.init(**conf.get_logging_info()):
 
     # TODO: change the name "features_to_keep" to "labels_to_keep"
@@ -94,14 +94,21 @@ def train(
         weight_decay = conf.hyper_params["training"]["weight_decay"],
     )
 
-    # TODO: implement schedules
     scheduler = lr_scheduler.ReduceLROnPlateau(
         optimizer=opt, 
         patience=conf.hyper_params["training"]["patience_reduce_lr"],
         min_lr=conf.hyper_params["training"]["min_lr"]
     )
-    best_loss = 1000
-    last_best_epoch = 0
+
+    scheduler_for_training_end = lr_scheduler.ReduceLROnPlateau(
+        optimizer=opt,
+        patience=conf.hyper_params["training"]["patience_end_training"],
+    )
+
+    best_loss = 1000000
+    best_epoch = 0
+
+    print_memory_state_gpu("Before training", conf)
 
     for epoch in tqdm(range(conf.hyper_params["training"]["n_epochs"]), desc="Epoch", position=0):
         total_loss = 0
@@ -121,26 +128,32 @@ def train(
             total_loss += loss.item() * batch.num_graphs
 
         total_loss /= len(train_loader.dataset)
-        writer.add_scalar("loss/train", total_loss, epoch)
+        writer.add_scalar(f"{conf.hyper_params['loss']}/train", total_loss, epoch)
+        writer.add_scalar("lr", opt.param_groups[0]["lr"], epoch) # learning rate
+        writer.add_scalar("epoch", epoch, epoch) # learning rate
+        writer.add_scalar("num_bad_epochs/lr_scheduler", scheduler.num_bad_epochs, epoch)
+        writer.add_scalar("num_bad_epochs/end_of_training", scheduler_for_training_end.num_bad_epochs, epoch)
 
         if epoch % conf.hyper_params["val"]["n_epochs_val"] == 0:
             val_loss, metric_results = test(val_loader, model, conf)
 
-            scheduler.step(val_loss)
-
-            # TODO: complete model checkpoins and "save best"
-            # if val_loss < best_loss:
-            #     best_loss = val_loss
-            #     model_save_path = os.path.join(conf.DATA_DIR, "model_checkpoints", f"{last_best_epoch}ckpt_{run_name}.pt")
-            #     torch.save(model.state_dict(), model_save_path)
-            writer.add_scalar("loss/val", val_loss, epoch)
+            if val_loss < best_loss:
+                best_loss = val_loss
+                best_epoch = epoch
+                model_save_path = os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{epoch}_ckpt.pt")
+                torch.save(model.state_dict(), model_save_path)
+            writer.add_scalar(f"{conf.hyper_params['loss']}/val", val_loss, epoch)
             write_metric_results(metric_results, writer, epoch)
+        
+        if scheduler_for_training_end.num_bad_epochs >= scheduler_for_training_end.patience:
+            print(f"Restoring best weights of epoch {best_epoch}")
+            model.load_state_dict(
+                torch.load(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{best_epoch}_ckpt.pt"))
+            )
+            break
 
-
-    # with open(os.path.join(config['training']['save_training_info_dir'], 
-    #                         config['training']['base_stats_save_name']), 'wb') as f:
-    #     pickle.dump(metrics_test, f)
-
+        scheduler.step(metrics=val_loss)
+        scheduler_for_training_end.step(metrics=val_loss)
         
     return model
 

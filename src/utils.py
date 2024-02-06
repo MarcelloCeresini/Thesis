@@ -1,6 +1,6 @@
 import os
 import pickle
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 import itertools
 
 import meshio
@@ -17,6 +17,9 @@ from circle_fit import hyperLSQ
 import torch
 from torch_geometric.data import Data
 from scipy.spatial.distance import cdist
+from torch_geometric.utils import to_dense_adj
+from rustworkx import PyGraph
+from rustworkx import distance_matrix
 
 from config_pckg.config_file import Config
 import read_mesh_meshio_forked
@@ -597,6 +600,36 @@ def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf):
     meshCI.plot_mesh(labels=pred)
 
 
+def add_distance_from_BC_and_BC_flag(attr, attr_m, edges):
+    n_nodes = len(attr)
+    A = np.zeros((n_nodes, n_nodes)).astype(np.float64)
+    for edge in edges:
+        i, j = int(edge[0]), int(edge[1])
+        A[i,j] = 1.
+
+    rust_g = PyGraph.from_adjacency_matrix(A)
+    dist_m = distance_matrix(rust_g, parallel_threshold=10000)
+
+    bc_nodes_list = []
+    other_nodes = []
+    for i, mask in enumerate(attr_m):
+        if sum(mask) >= 4:
+            bc_nodes_list.append(i)
+        else:
+            other_nodes.append(i)
+    
+    BC_flag = np.zeros((n_nodes,1))
+    BC_flag[np.array(bc_nodes_list)] = 1
+
+    dist_from_bc_per_node = np.min(dist_m[:, np.array(bc_nodes_list)], axis=1)
+    max_dist_from_bc = np.max(dist_from_bc_per_node)
+
+    attr = np.concatenate((attr, np.expand_dims(dist_from_bc_per_node, 1), BC_flag), axis=1)
+    attr_m = np.concatenate((attr_m, np.ones((n_nodes, 2))), axis=1)
+
+    return attr, attr_m, max_dist_from_bc
+
+
 def convert_mesh_complete_info_obj_to_graph(
         conf:Config,
         meshCI, # MeshCompleteInfo object
@@ -618,6 +651,22 @@ def convert_mesh_complete_info_obj_to_graph(
             FcFc_edges_bidir = np.concatenate([meshCI.FcFc_edges, np.flip(meshCI.FcFc_edges, axis=1)], axis=0)
             graph_edges = FcFc_edges_bidir
 
+            graph_node_attr, graph_node_attr_mask, max_dist_from_bc = add_distance_from_BC_and_BC_flag(
+                graph_node_attr,
+                graph_node_attr_mask,
+                graph_edges
+                )
+            
+            features_to_remove = set(conf.graph_node_feature_dict.keys()).difference(set(conf.graph_node_final_features))
+            idxs_to_remove = [conf.graph_node_feature_dict[f] for f in features_to_remove]
+            idxs_to_keep = []
+            for idx in range(graph_node_attr.shape[-1]):
+                if idx not in idxs_to_remove:
+                    idxs_to_keep.append(idx)
+
+            graph_node_attr = graph_node_attr[:, np.array(idxs_to_keep)]
+            graph_node_attr_mask = graph_node_attr_mask[:, np.array(idxs_to_keep)]
+
             graph_edge_relative_displacement_vector = np.array([graph_nodes_positions[p2]-graph_nodes_positions[p1] for (p1, p2) in graph_edges])
             graph_edge_norm = np.expand_dims(np.linalg.norm(graph_edge_relative_displacement_vector, axis=1), axis=1)
             graph_edge_attr = np.concatenate([graph_edge_relative_displacement_vector, graph_edge_norm], axis=1)
@@ -631,7 +680,7 @@ def convert_mesh_complete_info_obj_to_graph(
             )
             data.name = meshCI.name
             data.meshComplete_corresponding_path = meshCI.path
-            
+            data.max_dist_from_bc = max_dist_from_bc
             
             data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
 
@@ -641,6 +690,8 @@ def convert_mesh_complete_info_obj_to_graph(
 
             tmp = normalize_labels(meshCI.face_center_labels, conf.label_normalization_mode, conf)
             data.y = torch.tensor(tmp[conf.labels_to_keep_for_training].values, dtype=torch.float32)
+            
+            
             # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
 
         else:
@@ -769,23 +820,61 @@ class MeshCompleteInfo:
                     check_biunivocity=True)
 
 
-    def add_labels_from_graph(self, data: Data, which_element_has_labels: Literal["vertex", "face", "cell"]):
+    def add_labels_from_graph(
+            self, 
+            data: Union[Data, torch.Tensor, np.ndarray], 
+            which_element_has_labels: Literal["vertex", "face", "cell"], 
+            ordered_column_names: Optional[Union[list[str], str]] = None,
+            overwrite = False,
+            ):
+        
+        match data:
+            case Data():
+                labels = data.y.numpy()
+            case torch.Tensor():
+                labels = data.numpy()
+            case np.ndarray():
+                labels = data
+
+        if len(labels.shape) == 1:
+            labels = np.expand_dims(labels, axis=1)
+        
+        if ordered_column_names is None:
+            ordered_column_names = self.conf.graph_node_final_features
+        elif isinstance(ordered_column_names, str):
+            ordered_column_names = [ordered_column_names]
+    
+        assert labels.shape[1] == len(ordered_column_names), f"Shapes do not match: data has {labels.shape[1]} columns and ordered_column_names are {len(ordered_column_names)}"
+
         match which_element_has_labels:
             case "vertex":
-                assert data.y.shape[0] == self.mesh.points.shape[0], f"Data label shape {data.y.shape} does not match number of points in mesh {self.mesh.points.shape[0]}"
-                self.vertex_labels = pd.DataFrame(data.y, columns=self.conf.features_to_keep)
+                assert labels.shape[0] == self.mesh.points.shape[0], f"Data label shape {labels.shape} does not match number of points in mesh {self.mesh.points.shape[0]}"
+                obj = self.vertex_labels
             case "face":
-                assert data.y.shape[0] == self.face_center_positions.shape[0], f"Data label shape {data.y.shape} does not match number of faces in mesh {self.face_center_positions.shape[0]}"
-                self.face_center_labels = pd.DataFrame(data.y, columns=self.conf.features_to_keep)
+                assert labels.shape[0] == self.face_center_positions.shape[0], f"Data label shape {data.y.shape} does not match number of faces in mesh {self.face_center_positions.shape[0]}"
+                obj = self.face_center_labels
             case "cell":
-                assert data.y.shape[0] == self.cell_center_positions.shape[0], f"Data label shape {data.y.shape} does not match number of cells in mesh {self.cell_center_positions.shape[0]}"
-                self.cell_center_labels = pd.DataFrame(data.y, columns=self.conf.features_to_keep)
-                
+                assert labels.shape[0] == self.cell_center_positions.shape[0], f"Data label shape {data.y.shape} does not match number of cells in mesh {self.cell_center_positions.shape[0]}"
+                obj = self.cell_center_labels
+        
+
+        if obj is None:
+            obj = pd.DataFrame(labels, columns=ordered_column_names)
+        else:
+            for i, column in enumerate(ordered_column_names):
+                if overwrite:
+                    obj[column] = labels[:,i]
+                else:
+                    if column not in set(obj.columns):
+                        obj[column] = labels[:,i]
+
 
     def update_path(self, path):
         self.path = path
         self.name = path.split(os.sep)[-1].removesuffix(".pkl")
 
+    def get_graph(self) -> Data:
+        return torch.load(os.path.join(self.conf.EXTERNAL_FOLDER_GRAPHS, self.name+".pt"))
     
     def save_to_disk(self, filename):
         '''
@@ -806,7 +895,7 @@ class MeshCompleteInfo:
                   labels: Optional[torch.Tensor] = None,
                   ):
         '''
-        what_to_plot whould be a list of tuples (tup[0], tup[1], tup[2], tup[3]):
+        what_to_plot whould be a list of tuples (tup[0], tup[1], tup[2]):
             - tup[0]: Literal["vertex", "face", "cell"] --> can be "vertex", "face" or "cell"
 
             - tup[1]: Literal["label", "features"] --> should be "label". If tup[0] is "face" you can also have tup[1] = "features"
@@ -972,3 +1061,8 @@ class MeshCompleteInfo:
                             pl.camera_position = "xy"
                             pl.enable_anti_aliasing()
                             pl.show()
+
+
+def print_memory_state_gpu(text, conf):
+    if conf.device == "cuda":
+        print(f"{text} - Alloc: {torch.cuda.memory_allocated()/1024**3:.2f}Gb - Reserved: {torch.cuda.memory_reserved()/1024**3:.2f}Gb")

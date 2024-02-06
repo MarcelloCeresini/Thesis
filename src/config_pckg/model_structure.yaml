@@ -1,13 +1,27 @@
-name: BaselineModel
+name: EncodeProcessDecode_Baseline
 encoder:
-  name: Linear
-  repeats: 2
-  hidden_dim: 2
+  type: sequential_model
+  layers: 
+    - {type: layer, name: Linear, out_features: 4}
+    - {type: layer, name: ReLU}
+    # Last layer to get out_channels = message_passer["out_channels"] is automatic
 message_passer:
-  name: GCNConv
-  repeats: 5
-  hidden_dim: 64
+  type: repeated_shared_layer
+  repeats_training: 10
+  name: MLPConv # [NNConv, GCNConv, MLPConv]
+  out_channels: 8 # also in_channels are the same, to be able to call multiple times
+  mid_channels: 4
+  aggr: mean
+  nn: # takes as input edge_features (and does NOT update them, always gets edge features)
+    type: sequential_model
+    layers: 
+      - {type: layer, name: Linear, out_features: 4}
+      - {type: layer, name: ReLU}
+      # Last (Linear) layer for internal_mlp is always added autonomously
 decoder:
-  name: Linear
-  repeats: 2
-  hidden_dim: 32
+  type: sequential_model
+  layers: 
+    - {type: layer, name: Linear, out_features: 8}
+    - {type: layer, name: ReLU}
+    # Last (Linear) layer for regression is always added by model autonomously
+

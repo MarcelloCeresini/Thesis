@@ -19,7 +19,7 @@ class Config():
         self.ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.DATA_DIR = os.path.join(self.ROOT_DIR, "data")
         self.PROJECT_NAME = os.path.basename(self.ROOT_DIR)
-        self.device: Literal["cpu", "cuda"] = "cpu"
+        self.device: Literal["cpu", "cuda"] = "cuda"
 
         ##### external folders
         self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
@@ -28,10 +28,12 @@ class Config():
         self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
         self.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjsWithLabels_at300")
         self.EXTERNAL_FOLDER_GRAPHS = os.path.join(self.EXTERNAL_FOLDER, "Graphs")
-        self.standard_dataloader_path = os.path.join(self.DATA_DIR, "dataloaders.pt")
+        
+        self.standard_datalist_path = os.path.join(self.DATA_DIR, "datalists.pt")
+        # self.standard_dataloader_path = os.path.join(self.DATA_DIR, "dataloaders.pt")
 
 
-        self.problematic_files = ["2dtc_002R074_001_s01"]
+        self.problematic_files = {"2dtc_002R074_001_s01"}
 
         with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "hyperparams.yaml"), "r") as stream:
             try:
@@ -139,12 +141,30 @@ class Config():
             "v_t": 2,               # velocity along the tangent versor
             "v_n": 3,               # velocity along the perpendicular versor
             "p": 4,                 # pressure on the face
-            "dv_dt": 5,           # derivative along the tangent versor of v
+            "dv_dt": 5,             # derivative along the tangent versor of v
             "dp_dt": 6,             # ...
-            "dv_dn": 7,           # ...
-            "dp_dn": 8,            # ...
-            "component_id": 9,     # Maybe useful?
+            "dv_dn": 7,             # ...
+            "dp_dn": 8,             # ...
+            "component_id": 9,      # Maybe useful?
         }
+
+        self.graph_node_final_features = [
+            "tangent_versor_x",
+            "tangent_versor_y",
+            "v_t",
+            "v_n",
+            "p",
+            "dv_dt",
+            "dp_dt",
+            "dv_dn",
+            "dp_dn",
+            "dist_from_BC",
+            "BC_flag"
+        ]
+
+        self.graph_edge_attr_list = [
+            "x_dist", "y_dist", "z_dist", "norm"
+        ]
 
         self.flag_directional_BC_velocity = True
 
@@ -204,6 +224,8 @@ class Config():
         logged_hyperparams.update({
             "input_dim": self.input_dim,
             "output_dim": self.output_dim,
+            "feature_dim": len(self.graph_edge_attr_list),
+            "label_dim": len(self.labels_to_keep_for_training)
         })
 
         return_dict = {

@@ -39,25 +39,28 @@ def convert_all_msh_to_meshComplete(conf: Config(), input_dir: Optional[str] = N
 if __name__ == "__main__":
     conf = Config()
 
-    meshComplete_objs = convert_all_msh_to_meshComplete(conf, 
-                                                        input_dir=conf.EXTERNAL_FOLDER_MSH, 
-                                                        output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE)
+    # meshComplete_objs = convert_all_msh_to_meshComplete(conf, 
+    #                                                     input_dir=conf.EXTERNAL_FOLDER_MSH, 
+    #                                                     output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE)
     
-    # msh_filename = os.path.join(conf.EXTERNAL_FOLDER_MSH, "2dtc_002R002_001_s01.msh")
-    # convert_all_msh_to_meshComplete(conf, input_filenames=[msh_filename])
+    # # msh_filename = os.path.join(conf.EXTERNAL_FOLDER_MSH, "2dtc_002R002_001_s01.msh")
+    # # convert_all_msh_to_meshComplete(conf, input_filenames=[msh_filename])
 
-    for obj in (pbar := tqdm(meshComplete_objs)):
-        pbar.set_description(f"Adding labels to : {obj.name}")
-        obj.add_labels(os.path.join(conf.EXTERNAL_FOLDER_CSV, obj.name+"_cell_values_at300.csv"))
-        obj.save_to_disk(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, obj.name+".pkl"))
+    # for obj in (pbar := tqdm(meshComplete_objs)):
+    #     pbar.set_description(f"Adding labels to : {obj.name}")
+    #     if obj.name not in conf.problematic_files:
+    #         obj.add_labels(os.path.join(conf.EXTERNAL_FOLDER_CSV, obj.name+"_cell_values_at300.csv"))
+    #         obj.save_to_disk(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, obj.name+".pkl"))
 
-    graphs = []
-    for obj in (pbar := tqdm(meshComplete_objs)):
+    meshComplete_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, "*.pkl")))
+    for path in (pbar := tqdm(meshComplete_paths[55:])):
+        with open(path, "rb") as f:
+            obj = pickle.load(f)
         pbar.set_description(f"Creating graph of : {obj.name}")
-        graphs.append(convert_mesh_complete_info_obj_to_graph(
+        convert_mesh_complete_info_obj_to_graph(
             conf,
             obj,
-            filename_output_graph=os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, obj.name+".pt"))
+            filename_output_graph=os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, obj.name+".pt")
         )
     
 
