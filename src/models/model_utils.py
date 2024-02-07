@@ -8,7 +8,7 @@ from torch.nn import Linear, ReLU, Sequential
 from torch_geometric.nn import GCNConv, NNConv
 
 from config_pckg.config_file import Config
-from .layers import MLPConv
+from .layers import MLPConv, MLPConv_plus_global
 
 def get_only_required_kwargs(obj, complete_kwargs: dict):
     required_args = getfullargspec(obj).args
@@ -28,9 +28,11 @@ def get_obj_from_structure(
             match str_d["name"]:
                 case "Linear":
                     out_channels = str_d["out_features"]
-                    return out_channels, nn.Linear(in_features=in_channels, out_features=out_channels)
+                    obj = nn.Linear(in_features=in_channels, out_features=out_channels)
+                    return out_channels, obj
                 case "ReLU":
-                    return in_channels, nn.ReLU()
+                    obj = nn.ReLU()
+                    return in_channels, obj
                 case _:
                     raise NotImplementedError()
         
@@ -39,8 +41,8 @@ def get_obj_from_structure(
             curr_channels = in_channels
             for layer_structure in str_d["layers"]:
                 curr_channels, layer = get_obj_from_structure(
-                    in_channels=curr_channels, 
-                    str_d=layer_structure, 
+                    in_channels=curr_channels,
+                    str_d=layer_structure,
                     conf=conf
                 )
                 m_list.append(layer)
@@ -55,11 +57,12 @@ def get_obj_from_structure(
             match str_d["name"]:
                 case "GCNConv":
                     out_channels = str_d["out_channels"]
-                    return out_channels, \
-                        pyg_nn.GCNConv(
+                    obj = pyg_nn.GCNConv(
                             in_channels=in_channels, 
                             out_channels=out_channels
                         )
+                    return out_channels, obj
+                        
                 case "NNConv":
                     out_channels_conv = str_d["out_channels"]
                     _, mlp = get_obj_from_structure(
@@ -68,12 +71,13 @@ def get_obj_from_structure(
                                 conf=conf,
                                 out_channels=in_channels*str_d["out_channels"]
                             )
-                    return out_channels_conv, \
-                        pyg_nn.NNConv(
+                    obj = pyg_nn.NNConv(
                             in_channels=in_channels,
                             out_channels=out_channels_conv,
                             nn=mlp
                         )
+                    return out_channels_conv, obj
+                        
                 case "MLPConv":
                     out_channels = str_d["out_channels"]
                     _, mlp = get_obj_from_structure(
@@ -91,16 +95,41 @@ def get_obj_from_structure(
                         aggr=str_d["aggr"],
                     )
                     return out_channels, obj
-                
+                case "MLPConv_plus_global":
+                    out_channels = str_d["out_channels"]
+                    _, mlp = get_obj_from_structure(
+                                in_channels=str_d["mid_channels"],
+                                str_d=str_d["nn"],
+                                conf=conf,
+                                out_channels=str_d["mid_channels"],
+                            )
+                    obj = MLPConv_plus_global(
+                        in_channels=in_channels,
+                        out_channels=out_channels,
+                        mid_channels=str_d["mid_channels"],
+                        edge_channels=conf["hyperparams"]["feature_dim"],
+                        mlp=mlp,
+                        aggr=str_d["aggr"],
+                    )
+                    return out_channels, obj
         case "repeated_not_shared_layer":
             raise NotImplementedError()
-        
         case _:
             raise NotImplementedError()
 
 
 def forward_for_general_layer(layer, X_dict):
     match layer:
+        case MLPConv_plus_global():
+            x = layer(
+                x=          X_dict["x"], 
+                edge_index= X_dict["edge_index"], 
+                edge_attr=  X_dict["edge_attr"],
+                x_graph=    X_dict["x_graph"],
+                x_BC=       X_dict["x_BC"],
+                batch=      X_dict["batch"],
+            )
+            return {"x": x}
         case MLPConv():
             x = layer(
                 x=          X_dict["x"], 

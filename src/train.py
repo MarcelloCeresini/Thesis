@@ -12,7 +12,7 @@ from torch.optim import Adam
 import torch.optim.lr_scheduler as lr_scheduler 
 from torch.masked import masked_tensor
 
-from utils import print_memory_state_gpu
+from utils import print_memory_state_gpu, get_input_to_model
 from config_pckg.config_file import Config 
 
 
@@ -55,8 +55,8 @@ def test(loader: pyg_data.DataLoader, model, conf):
         total_loss = 0
         model.eval()
         for batch in loader:
-            input_to_model = batch.x, batch.x_mask, batch.edge_index, batch.edge_attr, batch.batch
-            pred = model(*input_to_model)
+            input_to_model = get_input_to_model(batch)
+            pred = model(**input_to_model)
             
             labels = clean_labels(batch, model.conf)
             loss = model.loss(pred, labels)
@@ -115,10 +115,8 @@ def train(
         model.train()
         for batch in tqdm(train_loader, leave=False, desc="Batch in epoch", position=1):
             opt.zero_grad()
-            input_to_model = batch.x, batch.x_mask, batch.edge_index, batch.edge_attr, batch.batch
-            pred = model(*input_to_model)
-            # pred = model(batch)
-            # FIXME: change masked tensor with manual mask (slow implementation by pytorch)
+            input_to_model = get_input_to_model(batch)
+            pred = model(**input_to_model)
             labels = clean_labels(batch, model.conf)
             loss = model.loss(pred, labels)
 

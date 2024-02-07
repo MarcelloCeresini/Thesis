@@ -133,7 +133,7 @@ class Config():
         }
 
         self.air_speed = 50 # m/s
-        self.atmosferic_pressure = 1.01325e5 # Pa
+        self.relative_atmosferic_pressure = 0
 
         self.graph_node_feature_dict = {
             "tangent_versor_x": 0,  # x-component of versor tangent to the face
@@ -158,8 +158,6 @@ class Config():
             "dp_dt",
             "dv_dn",
             "dp_dn",
-            "dist_from_BC",
-            "BC_flag"
         ]
 
         self.graph_edge_attr_list = [
@@ -213,7 +211,7 @@ class Config():
         # TODO: implement global metrics
 
         # TODO: find another way to apply initial mask?
-        self.input_dim = (len(self.graph_node_feature_dict)-1)*2
+        self.input_dim = len(self.graph_node_final_features)*2+1
         self.output_dim = len(self.labels_to_keep_for_training)
 
     def get_tensorboard_logging_info(self) -> Dict:

@@ -318,9 +318,11 @@ def get_face_data(face_mesh: meshio.Mesh, vertices_in_cells):
 def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in_faces, conf: Config):
     point_positions = mesh.points
 
-    # TODO: decide how to differenciate between fixed and free features
     face_center_attr_BC = np.zeros((len(face_center_positions), len(conf.graph_node_feature_dict)))
-    face_center_attr_BC_mask = np.zeros((len(face_center_positions), len(conf.graph_node_feature_dict))).astype(bool)
+    face_center_attr_BC_mask = np.zeros((len(face_center_positions), len(conf.graph_node_feature_dict)+1)).astype(bool)
+
+    # Add general "is_BC" mask
+    face_center_attr_BC_mask[:,-1] = True # set all "is_BC?" masks = True and then set it to 0 in "interior" below
 
     face_spatial_dir = [point_positions[v[1]]-point_positions[v[0]] for v in vertices_in_faces]
     face_spatial_dir_norm = np.array([vec/np.linalg.norm(vec) for vec in face_spatial_dir])
@@ -348,7 +350,7 @@ def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in
                                                         
         match bc_type:
             case 2: # interior, no condition
-                pass
+                face_center_attr_BC_mask[faces_of_faceblock_idxs, -1] = False # set "is_BC" masks = False
             case 3: # wall, speed fixed depending on the name
                 face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
                 face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = True
@@ -392,7 +394,7 @@ def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in
                 else:
                     raise NotImplementedError(f"Didn't implement this kind of wall yet: {name}")
             case 5: # pressure-outlet
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = conf.atmosferic_pressure
+                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = conf.relative_atmosferic_pressure
                 face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = True
                 face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_dn"]] = 0
                 face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_dn"]] = True
@@ -488,6 +490,7 @@ def convert_msh_to_mesh_complete_info_obj(
         conf: Config,
         filename_input_msh,
         filename_output_mesh_complete_obj: Optional[str] = None,
+        add_distance_from_BC: Optional[bool] = False,
         ):
 
     '''Given an ASCII .msh file from ANSA, returns a graph and saves it to memory'''
@@ -515,6 +518,9 @@ def convert_msh_to_mesh_complete_info_obj(
         CcFc_edges
     )
 
+    if add_distance_from_BC:
+        mesh_complete_instance.add_distance_from_BC()
+
     if filename_output_mesh_complete_obj is not None:
         mesh_complete_instance.save_to_disk(filename_output_mesh_complete_obj)
 
@@ -526,9 +532,9 @@ def normalize_features(features, conf):
         case "None":
             return features
         case "Physical":
-            features[conf.graph_node_feature_dict["v_t"]] /= conf.air_speed
-            features[conf.graph_node_feature_dict["v_n"]] /= conf.air_speed
-            features[conf.graph_node_feature_dict["p"]] /= (conf.air_speed**2)/2
+            features[:, conf.graph_node_feature_dict["v_t"]] /= conf.air_speed
+            features[:, conf.graph_node_feature_dict["v_n"]] /= conf.air_speed
+            features[:, conf.graph_node_feature_dict["p"]] /= (conf.air_speed**2)/2
             return features
         case _:
             raise NotImplementedError("Only implemented 'None' and 'Physical'")
@@ -600,36 +606,6 @@ def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf):
     meshCI.plot_mesh(labels=pred)
 
 
-def add_distance_from_BC_and_BC_flag(attr, attr_m, edges):
-    n_nodes = len(attr)
-    A = np.zeros((n_nodes, n_nodes)).astype(np.float64)
-    for edge in edges:
-        i, j = int(edge[0]), int(edge[1])
-        A[i,j] = 1.
-
-    rust_g = PyGraph.from_adjacency_matrix(A)
-    dist_m = distance_matrix(rust_g, parallel_threshold=10000)
-
-    bc_nodes_list = []
-    other_nodes = []
-    for i, mask in enumerate(attr_m):
-        if sum(mask) >= 4:
-            bc_nodes_list.append(i)
-        else:
-            other_nodes.append(i)
-    
-    BC_flag = np.zeros((n_nodes,1))
-    BC_flag[np.array(bc_nodes_list)] = 1
-
-    dist_from_bc_per_node = np.min(dist_m[:, np.array(bc_nodes_list)], axis=1)
-    max_dist_from_bc = np.max(dist_from_bc_per_node)
-
-    attr = np.concatenate((attr, np.expand_dims(dist_from_bc_per_node, 1), BC_flag), axis=1)
-    attr_m = np.concatenate((attr_m, np.ones((n_nodes, 2))), axis=1)
-
-    return attr, attr_m, max_dist_from_bc
-
-
 def convert_mesh_complete_info_obj_to_graph(
         conf:Config,
         meshCI, # MeshCompleteInfo object
@@ -650,12 +626,6 @@ def convert_mesh_complete_info_obj_to_graph(
 
             FcFc_edges_bidir = np.concatenate([meshCI.FcFc_edges, np.flip(meshCI.FcFc_edges, axis=1)], axis=0)
             graph_edges = FcFc_edges_bidir
-
-            graph_node_attr, graph_node_attr_mask, max_dist_from_bc = add_distance_from_BC_and_BC_flag(
-                graph_node_attr,
-                graph_node_attr_mask,
-                graph_edges
-                )
             
             features_to_remove = set(conf.graph_node_feature_dict.keys()).difference(set(conf.graph_node_final_features))
             idxs_to_remove = [conf.graph_node_feature_dict[f] for f in features_to_remove]
@@ -665,6 +635,7 @@ def convert_mesh_complete_info_obj_to_graph(
                     idxs_to_keep.append(idx)
 
             graph_node_attr = graph_node_attr[:, np.array(idxs_to_keep)]
+            idxs_to_keep = np.concatenate((idxs_to_keep, np.expand_dims(graph_node_attr_mask.shape[1]-1, axis=0)))
             graph_node_attr_mask = graph_node_attr_mask[:, np.array(idxs_to_keep)]
 
             graph_edge_relative_displacement_vector = np.array([graph_nodes_positions[p2]-graph_nodes_positions[p1] for (p1, p2) in graph_edges])
@@ -680,7 +651,6 @@ def convert_mesh_complete_info_obj_to_graph(
             )
             data.name = meshCI.name
             data.meshComplete_corresponding_path = meshCI.path
-            data.max_dist_from_bc = max_dist_from_bc
             
             data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
 
@@ -690,8 +660,6 @@ def convert_mesh_complete_info_obj_to_graph(
 
             tmp = normalize_labels(meshCI.face_center_labels, conf.label_normalization_mode, conf)
             data.y = torch.tensor(tmp[conf.labels_to_keep_for_training].values, dtype=torch.float32)
-            
-            
             # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
 
         else:
@@ -790,6 +758,7 @@ class MeshCompleteInfo:
         self.face_center_features, self.face_center_ord_features_mask, self.inlet_points_positions = \
             get_face_BC_attributes(mesh, face_center_positions, vertices_in_faces, conf)
         
+        self.dist_from_BC = None
         self.vertex_labels = None
         self.face_center_labels = None
         self.cell_center_labels = None
@@ -818,7 +787,6 @@ class MeshCompleteInfo:
                     labels_csv_filename, 
                     self.conf, 
                     check_biunivocity=True)
-
 
     def add_labels_from_graph(
             self, 
@@ -890,10 +858,30 @@ class MeshCompleteInfo:
         self.update_path(filename)
 
 
+    def add_distance_from_BC(self, ):
+        is_BC = self.face_center_ord_features_mask[-1]
+        edges = self.FcFc_edges # TODO: bidirectional?
+
+        n_nodes = len(is_BC)
+        A = np.zeros((n_nodes, n_nodes)).astype(np.float64)
+        for edge in edges:
+            i, j = int(edge[0]), int(edge[1])
+            A[i,j] = 1.
+        
+        A += A.T # add bidirectional edges
+
+        rust_g = PyGraph.from_adjacency_matrix(A)
+        dist_m = distance_matrix(rust_g, parallel_threshold=10000)
+
+        dist_from_bc_per_node = np.min(dist_m[:, is_BC], axis=1)
+        self.dist_from_BC = dist_from_bc_per_node
+        return dist_from_bc_per_node
+
+
     def plot_mesh(self, 
-                  what_to_plot = None,
-                  labels: Optional[torch.Tensor] = None,
-                  ):
+                what_to_plot = None,
+                labels: Optional[torch.Tensor] = None,
+                ):
         '''
         what_to_plot whould be a list of tuples (tup[0], tup[1], tup[2]):
             - tup[0]: Literal["vertex", "face", "cell"] --> can be "vertex", "face" or "cell"
@@ -1066,3 +1054,15 @@ class MeshCompleteInfo:
 def print_memory_state_gpu(text, conf):
     if conf.device == "cuda":
         print(f"{text} - Alloc: {torch.cuda.memory_allocated()/1024**3:.2f}Gb - Reserved: {torch.cuda.memory_reserved()/1024**3:.2f}Gb")
+
+
+def get_input_to_model(batch):
+    '''Used because model summary doesn't work if you give in input arbitrary objects'''
+    return {
+        "x": batch.x,
+        "x_mask": batch.x_mask,
+        "edge_index": batch.edge_index,
+        "edge_attr": batch.edge_attr,
+        "batch": batch.batch,
+        "pos": batch.pos,
+    }

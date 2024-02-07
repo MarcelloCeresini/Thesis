@@ -46,6 +46,7 @@ if __name__ == "__main__":
     train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
         conf, load_from_disk=True)
     
+    print("done")
 
     
     ############
@@ -66,29 +67,29 @@ if __name__ == "__main__":
     ############
 
     # model, full_conf = get_last_training(conf)
-    data = test_dataloader.dataset[0]
+    # data = test_dataloader.dataset[0]
 
-    adj = torch_geometric.utils.to_dense_adj(data.edge_index)[0].numpy().astype(np.float64)
-    rust_g = rustworkx.PyGraph.from_adjacency_matrix(adj)
-    print(time())
-    distance_matrix = rustworkx.distance_matrix(rust_g, parallel_threshold=10000)
-    # a = to_networkx(data)
-    print(time())
-    ########
-    bc_nodes_list = []
-    other_nodes = []
-    n_nodes = data.x.shape[0]
-    for i, mask in enumerate(data.x_mask):
-        if sum(mask) >= 4:
-            bc_nodes_list.append(i)
-        else:
-            other_nodes.append(i)
+    # adj = torch_geometric.utils.to_dense_adj(data.edge_index)[0].numpy().astype(np.float64)
+    # rust_g = rustworkx.PyGraph.from_adjacency_matrix(adj)
+    # print(time())
+    # distance_matrix = rustworkx.distance_matrix(rust_g, parallel_threshold=10000)
+    # # a = to_networkx(data)
+    # print(time())
+    # ########
+    # bc_nodes_list = []
+    # other_nodes = []
+    # n_nodes = data.x.shape[0]
+    # for i, mask in enumerate(data.x_mask):
+    #     if sum(mask) >= 4:
+    #         bc_nodes_list.append(i)
+    #     else:
+    #         other_nodes.append(i)
 
-    dist_from_bc_per_node = np.min(distance_matrix[:, np.array(bc_nodes_list)], axis=1)
-    max_dist_from_bc = np.max(dist_from_bc_per_node)
+    # dist_from_bc_per_node = np.min(distance_matrix[:, np.array(bc_nodes_list)], axis=1)
+    # max_dist_from_bc = np.max(dist_from_bc_per_node)
 
-    data["dist_from_bc"] = dist_from_bc_per_node
-    data["max_dist_from_bc"] = max_dist_from_bc
+    # data["dist_from_bc"] = dist_from_bc_per_node
+    # data["max_dist_from_bc"] = max_dist_from_bc
 
 
     # max_dist = 0

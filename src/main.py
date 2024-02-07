@@ -12,7 +12,7 @@ from pandas import json_normalize
 from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders
 from train import train, test
-from utils import plot_gt_pred_label_comparison, print_memory_state_gpu
+from utils import plot_gt_pred_label_comparison, print_memory_state_gpu, get_input_to_model
 from models.models import get_model_instance
 
 def print_w_time(str):
@@ -46,31 +46,33 @@ layout["Standard Layout"]["epoch"] = ["Multiline", ["epoch"]]
 layout["Standard Layout"]["num_bad_epochs"] = ["Multiline", ["num_bad_epochs/lr_scheduler", "num_bad_epochs/end_of_training"]]
 
 writer.add_custom_scalars(layout)
-### TENSORBOARD SETUP ####
+### TENSORBOARD SETUP END ####
 
-print_w_time("Getting dataloaders")
-train_dataloader, val_dataloader, test_dataloader = get_data_loaders(conf, load_from_disk=True)
+print_w_time("GETTING DATALOADERS")
+train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
+    conf, 
+    load_from_disk=True
+)
 print_memory_state_gpu("After DataLoaders", conf)
 
-print_w_time("Building model")
+print_w_time("BUILDING MODEL")
 model = get_model_instance(full_conf)
 model.to(conf.device)
 print_memory_state_gpu("After Model.cuda()", conf)
 
-print_w_time("Writing graph and summary")
+print_w_time("WRITING GRAPH SUMMARY")
 for batch in train_dataloader:
     break
-input_to_model = (batch.x, batch.x_mask, batch.edge_index, batch.edge_attr, batch.batch)
 # writer.add_graph(model, input_to_model=input_to_model, use_strict_trace=False)
-model_summary = summary(model, *input_to_model, leaf_module=None)
+model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
 writer.add_text("Model summary", "<pre>"+model_summary+"</pre>")
 print(model_summary)
 print_memory_state_gpu("After model summary", conf)
 
-print_w_time("Training")
+print_w_time("TRAINING")
 model = train(model, train_dataloader, val_dataloader, writer, conf)
 
-print_w_time("Saving model")
+print_w_time("SAVING MODEL")
 model_save_path = os.path.join(conf.DATA_DIR, "model_runs", f"{run_name}.pt")
 torch.save(model.state_dict(), model_save_path)
 model.eval()
