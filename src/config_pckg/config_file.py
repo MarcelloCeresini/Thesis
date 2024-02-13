@@ -30,6 +30,9 @@ class Config():
         self.EXTERNAL_FOLDER_GRAPHS = os.path.join(self.EXTERNAL_FOLDER, "Graphs")
         
         self.standard_datalist_path = os.path.join(self.DATA_DIR, "datalists.pt")
+        self.test_imgs_comparisons = os.path.join(self.DATA_DIR, "test_imgs_comparisons")
+        self.test_htmls_comparisons = os.path.join(self.DATA_DIR, "test_htmls_comparisons")
+        self.test_vtksz_comparisons = os.path.join(self.DATA_DIR, "test_vtksz_comparisons")
         # self.standard_dataloader_path = os.path.join(self.DATA_DIR, "dataloaders.pt")
 
 
@@ -132,6 +135,9 @@ class Config():
             "cell_face": 3,
         }
 
+
+
+
         self.air_speed = 50 # m/s
         self.relative_atmosferic_pressure = 0
 
@@ -194,10 +200,10 @@ class Config():
             self.split_idxs = pickle.load(f)
 
         self.metrics = {
-            "MAPR": MeanAbsolutePercentageError(), 
-            "wMAPR": WeightedMeanAbsolutePercentageError(), 
-            "SMAPE": SymmetricMeanAbsolutePercentageError(), 
-            "RSE": RelativeSquaredError(),
+            # "MAPR": MeanAbsolutePercentageError(), 
+            # "wMAPR": WeightedMeanAbsolutePercentageError(), 
+            # "SMAPE": SymmetricMeanAbsolutePercentageError(), 
+            # "RSE": RelativeSquaredError(),
             "MSE": MeanSquaredError(), 
             "MAE": MeanAbsoluteError(),
             "Pearson": PearsonCorrCoef()

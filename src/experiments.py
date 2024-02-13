@@ -19,24 +19,36 @@ from time import time
 import utils
 from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders
-from utils import convert_mesh_complete_info_obj_to_graph, plot_gt_pred_label_comparison
+from utils import convert_mesh_complete_info_obj_to_graph, plot_gt_pred_label_comparison, get_input_to_model
 from models.models import get_model_instance
 
 
-def get_training_data(run_name, conf):
+def get_training_data(run_name, conf, from_checkpoints:bool):
     with open(os.path.join(conf.ROOT_DIR, "log", run_name, "full_conf.pkl"), "rb") as f:
         full_conf = pickle.load(f)
     model = get_model_instance(full_conf)
-    model.load_state_dict(torch.load(os.path.join(conf.DATA_DIR, "model_runs", f"{run_name}.pt")))
+
+    if not from_checkpoints:
+        model.load_state_dict(torch.load(os.path.join(conf.DATA_DIR, "model_runs", f"{run_name}.pt")))
+    else:
+        checkpoints = sorted(os.listdir(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name)))
+        idx_max_ckpt = np.argmax([int(x.split("_")[0]) for x in checkpoints])
+        model.load_state_dict(torch.load(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, checkpoints[idx_max_ckpt])))
+
     model.eval()
 
     return model, full_conf
 
 
-def get_last_training(conf):
-    dirlist = sorted(os.listdir(os.path.join(conf.ROOT_DIR, "log")))
-    model, full_conf = get_training_data(dirlist[-1], conf)
-    return model, full_conf
+def get_last_training(conf, from_checkpoints: bool =False):
+    if not from_checkpoints:
+        dirlist = sorted(os.listdir(os.path.join(conf.DATA_DIR, "model_runs")))
+        run_name = dirlist[-1].split(".")[0]
+    else:
+        dirlist = sorted(os.listdir(os.path.join(conf.DATA_DIR, "model_checkpoints")))
+        run_name = dirlist[-1]
+    model, full_conf = get_training_data(run_name, conf, from_checkpoints=from_checkpoints)
+    return model, full_conf, run_name
 
 
 if __name__ == "__main__":
@@ -46,81 +58,23 @@ if __name__ == "__main__":
     train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
         conf, load_from_disk=True)
     
-    print("done")
+    # print results of last training
+    # model, model_conf, run_name = get_last_training(conf, from_checkpoints=True)
+    # model.cpu()
+    # print(f"Last training: {run_name}")
 
-    
-    ############
-    # dirlist = sorted(os.listdir(os.path.join(conf.ROOT_DIR, "log")))
-    # run_name = dirlist[-1]
-    # with open(os.path.join(conf.ROOT_DIR, "log", run_name, "full_conf.pkl"), "rb") as f:
-    #     full_conf = pickle.load(f)
-    # model = get_model_instance(full_conf)
-    # model.load_state_dict(
-    #     torch.load(
-    #         os.path.join(conf.ROOT_DIR, "data", "model_checkpoints", run_name, "85_ckpt.pt")
-    # ))
-    
-    # model, old_full_conf = get_last_training(conf)
-
-    # model = get_model_instance(conf.get_tensorboard_logging_info())
-    
-    ############
-
-    # model, full_conf = get_last_training(conf)
-    # data = test_dataloader.dataset[0]
-
-    # adj = torch_geometric.utils.to_dense_adj(data.edge_index)[0].numpy().astype(np.float64)
-    # rust_g = rustworkx.PyGraph.from_adjacency_matrix(adj)
-    # print(time())
-    # distance_matrix = rustworkx.distance_matrix(rust_g, parallel_threshold=10000)
-    # # a = to_networkx(data)
-    # print(time())
-    # ########
-    # bc_nodes_list = []
-    # other_nodes = []
-    # n_nodes = data.x.shape[0]
-    # for i, mask in enumerate(data.x_mask):
-    #     if sum(mask) >= 4:
-    #         bc_nodes_list.append(i)
-    #     else:
-    #         other_nodes.append(i)
-
-    # dist_from_bc_per_node = np.min(distance_matrix[:, np.array(bc_nodes_list)], axis=1)
-    # max_dist_from_bc = np.max(dist_from_bc_per_node)
-
-    # data["dist_from_bc"] = dist_from_bc_per_node
-    # data["max_dist_from_bc"] = max_dist_from_bc
-
-
-    # max_dist = 0
-    # c = 0
-    # for i, node in tqdm(enumerate(other_nodes), total=len(other_nodes)):
-    #     min_dist_from_this_to_bc = n_nodes
-    #     for j, bc_node in enumerate(bc_nodes_list):
-    #         c+=1
-    #         tmp = networkx.shortest_path_length(a, node, bc_node)
-    #         if tmp < min_dist_from_this_to_bc:
-    #             min_dist_from_this_to_bc = tmp
-    #             if min_dist_from_this_to_bc < max_dist:
-    #                 break
-    #     if min_dist_from_this_to_bc > max_dist:
-    #         max_dist = min_dist_from_this_to_bc
-    #         print()
-    #         print(f"{c/((i+1)*len(bc_nodes_list))*100:.2f}% - {i} - {max_dist}")
-    
-    # print(f"{c/(len(other_nodes)*len(bc_nodes_list))*100:.2f}%")
-    ######
-
-
-    # for batch in test_dataloader:
-    #     input_to_model = batch.x, batch.x_mask, batch.edge_index, batch.edge_attr, batch.batch
-    #     pred_batch = model(*input_to_model)
+    # for batch in tqdm(test_dataloader):
+    #     pred_batch = model(**get_input_to_model(batch))
     #     for i in range(len(batch)):
     #         with torch.no_grad():
     #             data = batch[i]
     #             pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
-    #             plot_gt_pred_label_comparison(data, pred, conf)
-    #             break
-    #     break
+    #             plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)
 
-    
+    # try if the model works
+    full_conf = conf.get_tensorboard_logging_info()
+    model = get_model_instance(full_conf) # build model
+    model.to(conf.device)
+    for batch in train_dataloader:
+        break
+    model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model

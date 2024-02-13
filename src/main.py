@@ -8,6 +8,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torch_geometric.data as pyg_data
 from torch_geometric.nn import summary
 from pandas import json_normalize
+from tqdm import tqdm
 
 from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders
@@ -22,6 +23,23 @@ conf = Config()
 
 full_conf = conf.get_tensorboard_logging_info()
 hparams_flattened = json_normalize(full_conf).to_dict(orient="records")[0]
+c=0
+while not all([
+            (isinstance(v, (int, str, bool, torch.Tensor, float)) or (v is None)) 
+                for v in hparams_flattened.values()]):
+    keys_to_pop = []
+    new_dict = {}
+    for k, v in hparams_flattened.items():
+        if isinstance(v, list):
+            for i, element in enumerate(v):
+                new_dict[k+"_"+str(i)] = element
+            keys_to_pop.append(k)
+    [hparams_flattened.pop(k) for k in keys_to_pop]
+    hparams_flattened.update(new_dict)
+    hparams_flattened = json_normalize(hparams_flattened).to_dict(orient="records")[0]
+    c+=1
+    print(c)
+    assert c<10, "Too many cycles"
 
 ### TENSORBOARD SETUP ####
 run_name = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -98,3 +116,9 @@ with torch.no_grad():
         metric_dict=metric_dict
     )
 
+    for batch in tqdm(test_dataloader):
+        pred_batch = model(**get_input_to_model(batch))
+        for i in range(len(batch)):
+            data = batch[i]
+            pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
+            plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)

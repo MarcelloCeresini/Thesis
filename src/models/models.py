@@ -112,7 +112,7 @@ class EncodeProcessDecode_Baseline(nn.Module):
         tmp = forward_for_general_layer(self.decoder, X)
         X.update(tmp)
         
-        return X["x"] # NO softmax because it's regression
+        return X["x"]
 
 
     def loss(self, pred:torch.Tensor, label:torch.Tensor):

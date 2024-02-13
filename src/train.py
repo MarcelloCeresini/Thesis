@@ -66,6 +66,7 @@ def test(loader: pyg_data.DataLoader, model, conf):
         total_loss /= len(loader.dataset)
         metric_results = compute_metric_results(metric_dict, conf)
 
+    del metric_dict
     return total_loss, metric_results
 
 
@@ -97,7 +98,8 @@ def train(
     scheduler = lr_scheduler.ReduceLROnPlateau(
         optimizer=opt, 
         patience=conf.hyper_params["training"]["patience_reduce_lr"],
-        min_lr=conf.hyper_params["training"]["min_lr"]
+        min_lr=conf.hyper_params["training"]["min_lr"],
+        cooldown=conf.hyper_params["training"]["cooldown"]
     )
 
     scheduler_for_training_end = lr_scheduler.ReduceLROnPlateau(
@@ -142,6 +144,7 @@ def train(
                 torch.save(model.state_dict(), model_save_path)
             writer.add_scalar(f"{conf.hyper_params['loss']}/val", val_loss, epoch)
             write_metric_results(metric_results, writer, epoch)
+            del metric_results
         
         if scheduler_for_training_end.num_bad_epochs >= scheduler_for_training_end.patience:
             print(f"Restoring best weights of epoch {best_epoch}")

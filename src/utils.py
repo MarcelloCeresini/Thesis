@@ -597,13 +597,14 @@ def denormalize_labels(labels, conf):
     return labels
 
 
-def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf):
+def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf, run_name: Optional[str]= None):
     with open(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, data.name+".pkl"), "rb") as f:
         meshCI = pickle.load(f)
         
     print(f"Plotting {meshCI.name}")
     pred = denormalize_labels(pred, conf)
-    meshCI.plot_mesh(labels=pred)
+    meshCI.set_conf(conf)
+    meshCI.plot_mesh(labels=pred, run_name = run_name)
 
 
 def convert_mesh_complete_info_obj_to_graph(
@@ -763,6 +764,11 @@ class MeshCompleteInfo:
         self.face_center_labels = None
         self.cell_center_labels = None
 
+        self.radial_attributes = self.get_radial_attributes()
+
+
+    def set_conf(self, conf):
+        self.conf = conf
 
     def add_labels(self, labels_csv_filename, mode:Literal["vertex","element"]="element"):
         
@@ -858,7 +864,10 @@ class MeshCompleteInfo:
         self.update_path(filename)
 
 
-    def add_distance_from_BC(self, ):
+    def get_min_distance_from_BC(self, mode: Literal["vertex", "face", "cell"]="face"):
+        if not mode=="face":
+            raise NotImplementedError("Only implemented for 'face' for now")
+
         is_BC = self.face_center_ord_features_mask[-1]
         edges = self.FcFc_edges # TODO: bidirectional?
 
@@ -878,9 +887,39 @@ class MeshCompleteInfo:
         return dist_from_bc_per_node
 
 
+    def get_radial_attributes(self):
+        n_points = self.face_center_positions.shape[0]
+        radial_attributes = np.zeros((n_points, self.conf.n_theta_bins))
+
+        th_bin_size = 2*np.pi/(self.conf.n_theta_bins+1)
+
+        BC_positions = self.face_center_positions[self.face_center_ord_features_mask[-1]==True]
+        vectors_node_to_BC = cdist(self.face_center_positions, BC_positions, lambda x,y: y-x) # 3-dimensional
+
+        for i in range(n_points):
+            thetas = np.arctan2(vectors_node_to_BC[i,:,1], vectors_node_to_BC[i,:,0]) # y, x
+            for j in range(self.conf.n_theta_bins):
+                th_min, th_max = -np.pi + j*th_bin_size, -np.pi + (j+1)*th_bin_size
+
+                idxs = (th_min <= thetas <= th_max)
+                if idxs.shape[0] > 0:
+                    vectors_inside_bin = vectors_node_to_BC[i, idxs, :]
+                    vec_norms = map(lambda x: np.linalg.norm(x), vectors_inside_bin) 
+                    
+                    radial_attributes[j, :] = (
+                        np.min(vec_norms), 
+                        np.max(vec_norms)
+                        )
+                else:
+                    radial_attributes[j, :] = (self.conf.default_radial_attribute_value, self.conf.default_radial_attribute_value)
+
+        return radial_attributes
+
+
     def plot_mesh(self, 
                 what_to_plot = None,
                 labels: Optional[torch.Tensor] = None,
+                run_name: Optional[str] = None,
                 ):
         '''
         what_to_plot whould be a list of tuples (tup[0], tup[1], tup[2]):
@@ -932,19 +971,26 @@ class MeshCompleteInfo:
             )
 
         if labels is not None:
-            pl = pyvista.Plotter(shape=(3, 3))
             # columns = self.conf.labels_to_keep_for_training # TODO: update all MeshComplete files from scratch
             columns = ['x-velocity', 'y-velocity', 'pressure']
-            face_label_df = pd.DataFrame(labels, columns=columns)
+            face_pred_labels = pd.DataFrame(labels, columns=columns)
             cell_pred_lables = pd.DataFrame(
-                [np.mean(face_label_df.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
+                [np.mean(face_pred_labels.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
             )
 
             for i, lab in enumerate(columns):
                 cell_pyv_mesh.cell_data[lab] = self.cell_center_labels[lab]
                 cell_pyv_mesh.cell_data[lab+"_pred"] = cell_pred_lables[lab]
                 cell_pyv_mesh.cell_data[lab+"_diff"] = self.cell_center_labels[lab] - cell_pred_lables[lab]
+                face_pyv_mesh.cell_data[lab] = self.face_center_labels[lab]
+                face_pyv_mesh.cell_data[lab+"_pred"] = face_pred_labels[lab]
+                face_pyv_mesh.cell_data[lab+"_diff"] = self.face_center_labels[lab] - face_pred_labels[lab]
 
+            if run_name is not None:
+                off_screen = True
+            else:
+                off_screen = False
+            pl = pyvista.Plotter(shape=(3, 3), off_screen=off_screen)
             for i, lab in enumerate(columns):
                 pl.subplot(0,i)
                 pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab, 
@@ -966,10 +1012,53 @@ class MeshCompleteInfo:
                     scalar_bar_args={"title":f"DIFF_{lab}"}, 
                     cmap="Spectral")
                 pl.camera_position = "xy"
-            
             pl.link_views()
+            if run_name is not None:
+                if not os.path.isdir(os.path.join(self.conf.test_htmls_comparisons, run_name)):
+                    os.mkdir(os.path.join(self.conf.test_htmls_comparisons, run_name))
+                if not os.path.isdir(os.path.join(self.conf.test_imgs_comparisons, run_name)):
+                    os.mkdir(os.path.join(self.conf.test_imgs_comparisons, run_name))
+                pl.camera.zoom(1.6)
+                pl.export_html(os.path.join(self.conf.test_htmls_comparisons, run_name, self.name+"_cell.html"))
+                pl.screenshot(
+                    filename=os.path.join(self.conf.test_imgs_comparisons, run_name, self.name+"_cell.png"),
+                    window_size=(1920,1200))
             # pl.enable_anti_aliasing() # BREAKS EVERYTHING do NOT use
-            pl.show()
+            else:
+                pl.show()
+
+            pl = pyvista.Plotter(shape=(3, 3), off_screen=off_screen)
+            for i, lab in enumerate(columns):
+                pl.subplot(0,i)
+                pl.add_mesh(face_pyv_mesh.copy(), scalars=lab, 
+                    lighting=False, 
+                    scalar_bar_args={"title":f"GT_{lab}"},
+                    cmap="Spectral")
+                pl.camera_position = "xy"
+
+                pl.subplot(1,i)
+                pl.add_mesh(face_pyv_mesh.copy(), scalars=lab+"_pred", 
+                    lighting=False, 
+                    scalar_bar_args={"title":f"PRED_{lab}"}, 
+                    cmap="Spectral")
+                pl.camera_position = "xy"
+
+                pl.subplot(2,i)
+                pl.add_mesh(face_pyv_mesh.copy(), scalars=lab+"_diff", 
+                    lighting=False, 
+                    scalar_bar_args={"title":f"DIFF_{lab}"}, 
+                    cmap="Spectral")
+                pl.camera_position = "xy"
+            pl.link_views()
+            if run_name is not None:
+                pl.camera.zoom(1.6)
+                pl.export_html(os.path.join(self.conf.test_htmls_comparisons, run_name, self.name+"_face.html"))
+                pl.screenshot(
+                    filename=os.path.join(self.conf.test_imgs_comparisons, run_name, self.name+"_face.png"),
+                    window_size=(1920,1200))
+            # pl.enable_anti_aliasing() # BREAKS EVERYTHING do NOT use
+            else:
+                pl.show()
             print("done")
 
         else:
