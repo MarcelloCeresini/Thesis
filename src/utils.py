@@ -272,6 +272,12 @@ def face_id_inside_faceblock_to_mesh_face_id(face_id_inside_faceblock, faceblock
     return face_id_inside_faceblock + np.sum(len_faceblocks[:faceblock_id+1])
 
 
+def shoelace(coords):
+    idx_x = np.arange(coords.shape[0]-1)
+    idx_y = idx_x+1
+
+    return np.abs(np.sum(coords[idx_x,0]*coords[idx_y,1]) - coords[-1,0]*coords[0,1]) / 2
+
 def get_cell_data(mesh: meshio.Mesh, conf: Config):
     '''
     Given a mesh returns:
@@ -284,7 +290,9 @@ def get_cell_data(mesh: meshio.Mesh, conf: Config):
     # Create a mesh from cells instead than from faces
     cell_mesh = toughio.Mesh(mesh.points, [(key, np.stack(val)) for key, val in dict_vertices_in_cells.items()])
 
-    return cell_mesh.centers, CcCc_edges_bidir, vertices_in_cells
+    cell_volumes = np.fromiter(map(shoelace, [mesh.points[v+[v[0]]][:,:2] for v in vertices_in_cells]), dtype=np.float64)
+
+    return cell_mesh.centers, CcCc_edges_bidir, vertices_in_cells, cell_volumes
 
 
 def get_face_data(face_mesh: meshio.Mesh, vertices_in_cells):
@@ -292,6 +300,9 @@ def get_face_data(face_mesh: meshio.Mesh, vertices_in_cells):
     vertices_in_faces = np.concatenate([c.data for c in face_mesh.cells], axis=0) # face_list[face_idx] = [list_of_node_idxs_in_that_face]
     tmp = set([frozenset([vertex_pair[0], vertex_pair[1]]) for vertex_pair in vertices_in_faces])
     vertices_in_faces = np.stack([np.array(list(fset)) for fset in tmp])
+
+    face_areas = np.linalg.norm(face_mesh.points[vertices_in_faces[:,1]] - 
+                                    face_mesh.points[vertices_in_faces[:,0]], axis=1)
 
     face_mesh = toughio.Mesh(face_mesh.points, [("line",vertices_in_faces)])
     face_center_positions = face_mesh.centers
@@ -312,119 +323,8 @@ def get_face_data(face_mesh: meshio.Mesh, vertices_in_cells):
     CcFc_edges = np.stack(CcFc_edges)
     FcFc_edges = np.stack(FcFc_edges)
     
-    return face_center_positions, FcFc_edges, vertices_in_faces, CcFc_edges
+    return face_center_positions, FcFc_edges, vertices_in_faces, CcFc_edges, face_areas
 
-
-def get_face_BC_attributes(mesh: meshio.Mesh, face_center_positions, vertices_in_faces, conf: Config):
-    point_positions = mesh.points
-
-    face_center_attr_BC = np.zeros((len(face_center_positions), len(conf.graph_node_feature_dict)))
-    face_center_attr_BC_mask = np.zeros((len(face_center_positions), len(conf.graph_node_feature_dict)+1)).astype(bool)
-
-    # Add general "is_BC" mask
-    face_center_attr_BC_mask[:,-1] = True # set all "is_BC?" masks = True and then set it to 0 in "interior" below
-
-    face_spatial_dir = [point_positions[v[1]]-point_positions[v[0]] for v in vertices_in_faces]
-    face_spatial_dir_norm = np.array([vec/np.linalg.norm(vec) for vec in face_spatial_dir])
-
-    # face tangent versor components (x, y)
-    face_center_attr_BC[:,:2] = face_spatial_dir_norm[:,:2]
-    face_center_attr_BC_mask[:,:2] = True
-
-    elem_info = mesh.info["elements"]
-    zone_id_bc_type = {elem: elem_info[elem]["bc_type"] if "bc_type" in elem_info[elem].keys() else -1 for elem in elem_info}
-    cellblock_idx_bc_type = [zone_id_bc_type[key] for key in mesh.info["zone_id_list_cellblocks"]]
-    cellblock_idx_name = [mesh.info["global"][str(key)]["zone_name"] if str(key) in mesh.info["global"].keys() else "" for key in mesh.info["zone_id_list_cellblocks"] ]
-
-    inlet_points = []
-
-    for i, tmp in enumerate(zip(mesh.cells, cellblock_idx_bc_type, cellblock_idx_name)):
-        faceblock, bc_type, name = tmp
-
-        faces_of_faceblock_idxs = [map_vertex_pair_to_face_idx(vertex_pair, vertices_in_faces)[0] for vertex_pair in faceblock.data]
-        points_of_faceblock_idxs = np.unique(np.concatenate([faceblock.data[:,0], faceblock.data[:,1]]))
-        points_of_faceblock_positions = point_positions[points_of_faceblock_idxs]
-
-        face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["component_id"]] = i
-        face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["component_id"]] = True
-                                                        
-        match bc_type:
-            case 2: # interior, no condition
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, -1] = False # set "is_BC" masks = False
-            case 3: # wall, speed fixed depending on the name
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = True
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = True
-
-                if "ground" in name: # same tangential velocity as the air entering the domain
-                    direction = face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["tangent_versor_x"]]
-                    if conf.flag_directional_BC_velocity:
-                        face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed * np.sign(direction)
-                    else:
-                        face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed
-
-                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
-
-                elif "tyre" in name: # in 2D, it rotates around the center with angular speed omega
-                    Cx, Cy, R, sigma = hyperLSQ(points_of_faceblock_positions[:,:2])
-                    omega = conf.air_speed / R
-                    rays = face_center_positions[faces_of_faceblock_idxs][:,:2] - [Cx, Cy]
-                    direction = np.cross(face_center_attr_BC[faces_of_faceblock_idxs,:2], rays)
-
-                    if conf.flag_directional_BC_velocity:
-                        v_t = np.linalg.norm(rays, axis=1) * omega * np.sign(direction) # v_t = r * omega
-                    else:
-                        v_t = np.linalg.norm(rays, axis=1) * omega
-
-                    # TODO: do we add a np.dot(v_t, face_spatial_dir_norm[:,:2]) to only get the component really tangent?
-                    ### OSS: mean angle deviation is ~ 0.00116
-                    # v_t_directional = np.cross([0,0,-omega], rays)[:,:2]
-                    # v_t_versor = np.array([v/np.linalg.norm(v) for v in v_t_directional])
-                    # face_versor = face_spatial_dir_norm[faces_of_faceblock_idxs][:,:2]
-                    # right_direction_face_versor = np.array([f*s for f,s in zip(face_versor, np.sign(direction))])
-                    # dot_products_v_f = [np.dot(f,v) for f, v in zip(right_direction_face_versor, v_t_versor)]
-                    # error_in_angle = [np.arccos(d) for d in dot_products_v_f]
-                    
-                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = v_t
-                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
-                elif any(x in name for x in ["w0", "default-exterior"]): # fixed wall, doesn't move
-                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
-                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
-                else:
-                    raise NotImplementedError(f"Didn't implement this kind of wall yet: {name}")
-            case 5: # pressure-outlet
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = conf.relative_atmosferic_pressure
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = True
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_dn"]] = 0
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_dn"]] = True
-            case 7: # simmetry, normal derivative = 0
-                pass
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = True
-                
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = True
-            case 10: # velocity_inlet
-                inlet_points.append(points_of_faceblock_positions)
-                # TODO: dp_dn = 0
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = True
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = conf.air_speed
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = True
-                face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
-                face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = True
-
-            case _:
-                raise NotImplementedError("Didn't implement this kind of BC yet")
-            
-    if len(inlet_points) >= 1:
-        inlet_points = np.stack(inlet_points)[0]
-    else:
-        print("WARNING, no inlet points found")
-    
-    return face_center_attr_BC, face_center_attr_BC_mask, inlet_points
-    
 
 def get_labels(positions, csv_filename, conf, check_biunivocity):
     '''Returns a [len(positions), N_features] matrix'''
@@ -501,9 +401,9 @@ def convert_msh_to_mesh_complete_info_obj(
 
     mesh = read_mesh(filename_input_msh, mode="meshio", conf=conf)
 
-    cell_center_positions, CcCc_edges_bidir, vertices_in_cells = get_cell_data(mesh, conf)
+    cell_center_positions, CcCc_edges_bidir, vertices_in_cells, cell_volumes = get_cell_data(mesh, conf)
     
-    face_center_positions, FcFc_edges, vertices_in_faces, CcFc_edges = get_face_data(mesh, vertices_in_cells)
+    face_center_positions, FcFc_edges, vertices_in_faces, CcFc_edges, face_areas = get_face_data(mesh, vertices_in_cells)
     
     mesh_complete_instance = MeshCompleteInfo(
         conf,
@@ -512,10 +412,12 @@ def convert_msh_to_mesh_complete_info_obj(
         cell_center_positions,
         CcCc_edges_bidir,
         vertices_in_cells,
+        cell_volumes,
         face_center_positions,
         FcFc_edges,
         vertices_in_faces,
-        CcFc_edges
+        CcFc_edges,
+        face_areas,
     )
 
     if add_distance_from_BC:
@@ -607,6 +509,43 @@ def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf, run_name
     meshCI.plot_mesh(labels=pred, run_name = run_name)
 
 
+def get_inward_normal_areas(
+        faces_idxs,
+        face_areas,
+        faces_x_component,
+        faces_y_component,
+        CcFc_edges,
+        cell_center_positions,
+        face_center_positions,):
+
+    faces_x_component = faces_x_component[faces_idxs]
+    faces_y_component = faces_y_component[faces_idxs]
+
+    normal_to_surface = np.stack((-faces_y_component, faces_x_component), axis=1)
+    opposite_normal_to_surface = np.stack((faces_y_component, -faces_x_component), axis=1)
+
+    CcFc_edges_component = CcFc_edges[CcFc_edges[:,2] == faces_idxs]
+    CcFc_vectors = face_center_positions[CcFc_edges_component[:,1]] - cell_center_positions[CcFc_edges_component[:,0]]
+
+    inward_normals = np.where(np.tensordot(normal_to_surface, CcFc_vectors, axes=[1, 1]), normal_to_surface, opposite_normal_to_surface)
+
+    return inward_normals*face_areas[faces_idxs]
+
+
+def get_forces(conf:Config, data:Data, pressure_values):
+
+    flap_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_flap"]]
+    tyre_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_tyre"]]
+    return_dict = {
+        "flap": torch.sum((data.inward_normal_areas[flap_faces], pressure_values[flap_faces]), dim=0),
+        "tyre": torch.sum((data.inward_normal_areas[tyre_faces], pressure_values[tyre_faces]), dim=0),}
+
+    return_dict["car"] = torch.sum(
+        torch.stack(data.force_on_component.values(), dim=0), dim=0)
+    
+    return return_dict
+
+
 def convert_mesh_complete_info_obj_to_graph(
         conf:Config,
         meshCI, # MeshCompleteInfo object
@@ -623,21 +562,11 @@ def convert_mesh_complete_info_obj_to_graph(
             graph_nodes_positions = meshCI.face_center_positions # not used because not relative
 
             graph_node_attr = normalize_features(meshCI.face_center_features, conf)
-            graph_node_attr_mask = meshCI.face_center_ord_features_mask
+            graph_node_attr_mask = meshCI.face_center_features_mask
+            graph_node_additional_attr = meshCI.face_center_additional_features
 
             FcFc_edges_bidir = np.concatenate([meshCI.FcFc_edges, np.flip(meshCI.FcFc_edges, axis=1)], axis=0)
             graph_edges = FcFc_edges_bidir
-            
-            features_to_remove = set(conf.graph_node_feature_dict.keys()).difference(set(conf.graph_node_final_features))
-            idxs_to_remove = [conf.graph_node_feature_dict[f] for f in features_to_remove]
-            idxs_to_keep = []
-            for idx in range(graph_node_attr.shape[-1]):
-                if idx not in idxs_to_remove:
-                    idxs_to_keep.append(idx)
-
-            graph_node_attr = graph_node_attr[:, np.array(idxs_to_keep)]
-            idxs_to_keep = np.concatenate((idxs_to_keep, np.expand_dims(graph_node_attr_mask.shape[1]-1, axis=0)))
-            graph_node_attr_mask = graph_node_attr_mask[:, np.array(idxs_to_keep)]
 
             graph_edge_relative_displacement_vector = np.array([graph_nodes_positions[p2]-graph_nodes_positions[p1] for (p1, p2) in graph_edges])
             graph_edge_norm = np.expand_dims(np.linalg.norm(graph_edge_relative_displacement_vector, axis=1), axis=1)
@@ -654,6 +583,7 @@ def convert_mesh_complete_info_obj_to_graph(
             data.meshComplete_corresponding_path = meshCI.path
             
             data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
+            data.x_additional = torch.Tensor(graph_node_additional_attr)
 
             data.n_faces = torch.tensor(meshCI.face_center_positions.shape[0])
             data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
@@ -663,6 +593,20 @@ def convert_mesh_complete_info_obj_to_graph(
             data.y = torch.tensor(tmp[conf.labels_to_keep_for_training].values, dtype=torch.float32)
             # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
 
+            data.inward_normal_areas = torch.zeros((data.x.shape[0], 2))
+
+            surface_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_car"]]
+            data.inward_normal_areas[surface_faces, :] = get_inward_normal_areas(
+                faces_idxs=surface_faces,
+                face_areas=data.x[:, conf.graph_node_feature_dict["face_area"]],
+                faces_x_component=data.x[:, conf.graph_node_feature_dict["tangent_versor_x"]],
+                faces_y_component=data.x[:, conf.graph_node_feature_dict["tangent_versor_y"]],
+                CcFc_edges=meshCI.CcFc_edges,
+                cell_center_positions=meshCI.cell_center_positions,
+                face_center_positions=meshCI.face_center_positions,)
+
+            data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,-1])
+            
         else:
             raise NotImplementedError("Implement dim = 3")
     else:
@@ -738,12 +682,14 @@ class MeshCompleteInfo:
             cell_center_positions,
             CcCc_edges_bidir,
             vertices_in_cells,
+            cell_volumes,
             face_center_positions, 
             FcFc_edges, 
             vertices_in_faces,
             CcFc_edges,
+            face_areas,
     ) -> None:
-        self.conf = conf
+        self.conf: Config = conf
         self.path = path
         self.name = path.split(os.sep)[-1].removesuffix(".pkl")
         self.group = 1 if "2dtc_001R" in self.name else 2
@@ -751,13 +697,15 @@ class MeshCompleteInfo:
         self.cell_center_positions = cell_center_positions
         self.CcCc_edges_bidir = CcCc_edges_bidir
         self.vertices_in_cells = vertices_in_cells
+        self.cell_volumes = cell_volumes
         self.face_center_positions = face_center_positions 
         self.FcFc_edges = FcFc_edges 
         self.vertices_in_faces = vertices_in_faces
         self.CcFc_edges = CcFc_edges
+        self.face_areas = face_areas
 
-        self.face_center_features, self.face_center_ord_features_mask, self.inlet_points_positions = \
-            get_face_BC_attributes(mesh, face_center_positions, vertices_in_faces, conf)
+        self.face_center_features, self.face_center_features_mask, self.face_center_additional_features,  self.inlet_points_positions = \
+            self.get_face_BC_attributes()
         
         self.dist_from_BC = None
         self.vertex_labels = None
@@ -765,6 +713,8 @@ class MeshCompleteInfo:
         self.cell_center_labels = None
 
         self.radial_attributes = self.get_radial_attributes()
+
+        self.face_center_features = np.concatenate((self.face_center_features, self.radial_attributes), axis=1)
 
 
     def set_conf(self, conf):
@@ -843,6 +793,127 @@ class MeshCompleteInfo:
                         obj[column] = labels[:,i]
 
 
+    def get_face_BC_attributes(self):
+
+        conf: Config = self.conf
+        mesh, face_center_positions, vertices_in_faces, face_areas = \
+            self.mesh, self.face_center_positions, self.vertices_in_faces, self.face_areas
+        
+        point_positions = mesh.points
+
+        face_center_attr_BC = np.zeros((len(face_center_positions), len(conf.graph_node_feature_dict)))
+        face_center_attr_BC_mask = np.zeros((len(face_center_positions), len(conf.graph_node_feature_mask))).astype(bool)
+        face_center_additional_attrs = np.zeros((len(face_center_positions), len(conf.graph_node_features_not_for_training)))
+
+        # Add general "is_BC" mask
+        face_center_attr_BC_mask[:,conf.graph_node_feature_mask["is_BC"]] = True # set all "is_BC?" masks = True and then set it to 0 in "interior" below
+
+        face_spatial_dir = [point_positions[v[1]]-point_positions[v[0]] for v in vertices_in_faces]
+        face_spatial_dir_norm = np.array([vec/np.linalg.norm(vec) for vec in face_spatial_dir])
+
+        # face tangent versor components (x, y)
+        face_center_attr_BC[:,conf.graph_node_feature_dict["tangent_versor_x"]] = face_spatial_dir_norm[:,0]
+        face_center_attr_BC[:,conf.graph_node_feature_dict["tangent_versor_y"]] = face_spatial_dir_norm[:,1]
+        face_center_attr_BC[:, conf.graph_node_feature_dict["face_area"]] = face_areas
+
+        elem_info = mesh.info["elements"]
+        zone_id_bc_type = {elem: elem_info[elem]["bc_type"] if "bc_type" in elem_info[elem].keys() else -1 for elem in elem_info}
+        cellblock_idx_bc_type = [zone_id_bc_type[key] for key in mesh.info["zone_id_list_cellblocks"]]
+        cellblock_idx_name = [mesh.info["global"][str(key)]["zone_name"] if str(key) in mesh.info["global"].keys() else "" for key in mesh.info["zone_id_list_cellblocks"] ]
+
+        inlet_points = []
+
+        for i, tmp in enumerate(zip(mesh.cells, cellblock_idx_bc_type, cellblock_idx_name)):
+            faceblock, bc_type, name = tmp
+
+            faces_of_faceblock_idxs = [map_vertex_pair_to_face_idx(vertex_pair, vertices_in_faces)[0] for vertex_pair in faceblock.data]
+            points_of_faceblock_idxs = np.unique(np.concatenate([faceblock.data[:,0], faceblock.data[:,1]]))
+            points_of_faceblock_positions = point_positions[points_of_faceblock_idxs]
+
+            face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["component_id"]] = i
+
+            match bc_type:
+                case 2: # interior, no condition
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["is_BC"]] = False # set "is_BC" masks = False
+                case 3: # wall, speed fixed depending on the name
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_n"]] = True
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["dp_dn"]] = True
+
+                    if "ground" in name: # same tangential velocity as the air entering the domain
+                        direction = face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["tangent_versor_x"]]
+                        if conf.flag_directional_BC_velocity:
+                            face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed * np.sign(direction)
+                        else:
+                            face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed
+
+                        face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_t"]] = True
+
+                    elif "tyre" in name: # in 2D, it rotates around the center with angular speed omega
+                        Cx, Cy, R, sigma = hyperLSQ(points_of_faceblock_positions[:,:2])
+                        omega = conf.air_speed / R
+                        rays = face_center_positions[faces_of_faceblock_idxs][:,:2] - [Cx, Cy]
+                        direction = np.cross(face_center_attr_BC[faces_of_faceblock_idxs,:2], rays)
+
+                        if conf.flag_directional_BC_velocity:
+                            v_t = np.linalg.norm(rays, axis=1) * omega * np.sign(direction) # v_t = r * omega
+                        else:
+                            v_t = np.linalg.norm(rays, axis=1) * omega
+
+                        # TODO: do we add a np.dot(v_t, face_spatial_dir_norm[:,:2]) to only get the component really tangent?
+                        ### OSS: mean angle deviation is ~ 0.00116
+                        # v_t_directional = np.cross([0,0,-omega], rays)[:,:2]
+                        # v_t_versor = np.array([v/np.linalg.norm(v) for v in v_t_directional])
+                        # face_versor = face_spatial_dir_norm[faces_of_faceblock_idxs][:,:2]
+                        # right_direction_face_versor = np.array([f*s for f,s in zip(face_versor, np.sign(direction))])
+                        # dot_products_v_f = [np.dot(f,v) for f, v in zip(right_direction_face_versor, v_t_versor)]
+                        # error_in_angle = [np.arccos(d) for d in dot_products_v_f]
+                        
+                        face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = v_t
+                        face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_t"]] = True
+
+                        face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["is_car"]] = 1
+                        face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["is_tyre"]] = 1
+                    elif any(x in name for x in ["w0", "default-exterior"]): # fixed wall, doesn't move
+                        face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
+                        face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_t"]] = True
+
+                        face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["is_car"]] = 1
+                        face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["is_flap"]] = 1
+                    else:
+                        raise NotImplementedError(f"Didn't implement this kind of wall yet: {name}")
+                case 5: # pressure-outlet
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = conf.relative_atmosferic_pressure
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["p"]] = True
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_dn"]] = 0
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["dv_dn"]] = True
+                case 7: # simmetry, normal derivative = 0
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_n"]] = True
+                    
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["dp_dn"]] = True
+                case 10: # velocity_inlet
+                    inlet_points.append(points_of_faceblock_positions)
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_t"]] = True
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = conf.air_speed
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_n"]] = True
+                    face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
+                    face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["dp_dn"]] = True
+
+                case _:
+                    raise NotImplementedError("Didn't implement this kind of BC yet")
+                
+        if len(inlet_points) >= 1:
+            inlet_points = np.stack(inlet_points)[0]
+        else:
+            print("WARNING, no inlet points found")
+        
+        return face_center_attr_BC, face_center_attr_BC_mask, face_center_additional_attrs, inlet_points
+
+
     def update_path(self, path):
         self.path = path
         self.name = path.split(os.sep)[-1].removesuffix(".pkl")
@@ -865,10 +936,10 @@ class MeshCompleteInfo:
 
 
     def get_min_distance_from_BC(self, mode: Literal["vertex", "face", "cell"]="face"):
-        if not mode=="face":
-            raise NotImplementedError("Only implemented for 'face' for now")
+        # if not mode=="face":
+        raise NotImplementedError("Need to change implementation")
 
-        is_BC = self.face_center_ord_features_mask[-1]
+        is_BC = self.face_center_features_mask[-1]
         edges = self.FcFc_edges # TODO: bidirectional?
 
         n_nodes = len(is_BC)
@@ -888,30 +959,42 @@ class MeshCompleteInfo:
 
 
     def get_radial_attributes(self):
+        # x_min = np.min(self.face_center_positions[:,0])
+        # x_max = np.max(self.face_center_positions[:,0])
+        # y_min = np.min(self.face_center_positions[:,1])
+        # y_max = np.max(self.face_center_positions[:,1])
+        
         n_points = self.face_center_positions.shape[0]
-        radial_attributes = np.zeros((n_points, self.conf.n_theta_bins))
+        radial_attributes = np.zeros((n_points, self.conf.n_theta_bins*self.conf.quantile_values)) + self.conf.default_radial_attribute_value
+        th_bin_size = 2*np.pi/(self.conf.n_theta_bins)
 
-        th_bin_size = 2*np.pi/(self.conf.n_theta_bins+1)
-
-        BC_positions = self.face_center_positions[self.face_center_ord_features_mask[-1]==True]
-        vectors_node_to_BC = cdist(self.face_center_positions, BC_positions, lambda x,y: y-x) # 3-dimensional
+        BC_positions = self.face_center_positions[self.face_center_features_mask[:,self.conf.graph_node_feature_mask["is_BC"]]==True]
+        
+        all_thetas = cdist(self.face_center_positions, BC_positions, lambda n, BC: np.arctan2(BC[1]-n[1], BC[0]-n[0]) ) # 3-dimensional
 
         for i in range(n_points):
-            thetas = np.arctan2(vectors_node_to_BC[i,:,1], vectors_node_to_BC[i,:,0]) # y, x
+            thetas = all_thetas[i]
             for j in range(self.conf.n_theta_bins):
-                th_min, th_max = -np.pi + j*th_bin_size, -np.pi + (j+1)*th_bin_size
+                th_min, th_max = (-np.pi + j*th_bin_size), (-np.pi + (j+1)*th_bin_size)
+                attr_idx_min = j*self.conf.quantile_values
+                attr_idx_max = (j+1)*self.conf.quantile_values
 
-                idxs = (th_min <= thetas <= th_max)
-                if idxs.shape[0] > 0:
-                    vectors_inside_bin = vectors_node_to_BC[i, idxs, :]
-                    vec_norms = map(lambda x: np.linalg.norm(x), vectors_inside_bin) 
-                    
-                    radial_attributes[j, :] = (
-                        np.min(vec_norms), 
-                        np.max(vec_norms)
-                        )
-                else:
-                    radial_attributes[j, :] = (self.conf.default_radial_attribute_value, self.conf.default_radial_attribute_value)
+                point_idxs = np.logical_and(th_min <= thetas, thetas <= th_max)
+
+                if point_idxs.sum() > 0:
+                    vectors_inside_bin = BC_positions[point_idxs] - self.face_center_positions[i]
+                    vector_norms_inside_bin = np.linalg.norm(vectors_inside_bin, axis=1)
+                    attributes_for_bin = np.quantile(vector_norms_inside_bin, self.conf.distance_quantiles_angular_bin)
+                    radial_attributes[i, attr_idx_min:attr_idx_max] = attributes_for_bin
+
+                    # plt.scatter(vectors_inside_bin[:,0], vectors_inside_bin[:,1])
+                    # plt.scatter(attributes_for_bin, np.tan((th_min+th_max)/2)*attributes_for_bin)
+                    # x = np.linspace(-5, 15, 100)
+                    # plt.plot(x, np.tan(th_min)*x)
+                    # plt.plot(x, np.tan(th_max)*x)
+                    # plt.xlim((x_min-self.face_center_positions[i, 0]), (x_max-self.face_center_positions[i, 0]))
+                    # plt.ylim((y_min-self.face_center_positions[i, 1]), (y_max-self.face_center_positions[i, 1]))
+                    # plt.show()
 
         return radial_attributes
 

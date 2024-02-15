@@ -3,11 +3,14 @@ from enum import Enum
 import os
 import pickle
 from typing import Annotated, Dict, Literal, Optional, TypedDict, Union
+import numpy as np
 
 import yaml
 from pyvista import CellType 
 from torchmetrics import MeanAbsoluteError, MeanAbsolutePercentageError, MeanSquaredError, PearsonCorrCoef, WeightedMeanAbsolutePercentageError, \
     SymmetricMeanAbsolutePercentageError, RelativeSquaredError # TODO: investigate in correlation coefficients etc...
+
+from loss_pckg import metrics
 
 class Config():
 
@@ -135,36 +138,44 @@ class Config():
             "cell_face": 3,
         }
 
-
-
-
         self.air_speed = 50 # m/s
         self.relative_atmosferic_pressure = 0
+        self.n_theta_bins = 32
+        self.quantile_values = 5
+        self.distance_quantiles_angular_bin = np.linspace(0,1,self.quantile_values)
+        self.default_radial_attribute_value = -1
+        self.n_radial_attributes = self.n_theta_bins * self.quantile_values
 
         self.graph_node_feature_dict = {
             "tangent_versor_x": 0,  # x-component of versor tangent to the face
             "tangent_versor_y": 1,  # y......
-            "v_t": 2,               # velocity along the tangent versor
-            "v_n": 3,               # velocity along the perpendicular versor
-            "p": 4,                 # pressure on the face
-            "dv_dt": 5,             # derivative along the tangent versor of v
-            "dp_dt": 6,             # ...
-            "dv_dn": 7,             # ...
-            "dp_dn": 8,             # ...
-            "component_id": 9,      # Maybe useful?
+            "face_area": 2,
+            "v_t": 3,               # velocity along the tangent versor
+            "v_n": 4,               # velocity along the perpendicular versor
+            "p": 5,                 # pressure on the face
+            "dv_dn": 6,             # ...
+            "dp_dn": 7,             # ...
+            # "dv_dt": 8,             # derivative along the tangent versor of v
+            # "dp_dt": 9,             # ...
         }
 
-        self.graph_node_final_features = [
-            "tangent_versor_x",
-            "tangent_versor_y",
-            "v_t",
-            "v_n",
-            "p",
-            "dv_dt",
-            "dp_dt",
-            "dv_dn",
-            "dp_dn",
-        ]
+        self.graph_node_feature_mask = {
+            "v_t": 0,               # velocity along the tangent versor
+            "v_n": 1,               # velocity along the perpendicular versor
+            "p": 2,                 # pressure on the face
+            "dv_dn": 3,             # ...
+            "dp_dn": 4,             # ...
+            "is_BC": 5
+            # "dv_dt": 6,             # derivative along the tangent versor of v
+            # "dp_dt": 7,             # ...
+        }
+
+        self.graph_node_features_not_for_training = {
+            "component_id": 0,      # Maybe useful?
+            "is_car": 1,
+            "is_flap": 2,
+            "is_tyre": 3,
+        }
 
         self.graph_edge_attr_list = [
             "x_dist", "y_dist", "z_dist", "norm"
@@ -209,6 +220,8 @@ class Config():
             "Pearson": PearsonCorrCoef()
         }
 
+        self.metric_aero = metrics.AeroMetric()
+
         self.metric_dict = {
             metric_name:{
                 label_name : deepcopy(metric_obj) for label_name in self.labels_to_keep_for_training
@@ -217,7 +230,7 @@ class Config():
         # TODO: implement global metrics
 
         # TODO: find another way to apply initial mask?
-        self.input_dim = len(self.graph_node_final_features)*2+1
+        self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)+self.n_radial_attributes
         self.output_dim = len(self.labels_to_keep_for_training)
 
     def get_tensorboard_logging_info(self) -> Dict:

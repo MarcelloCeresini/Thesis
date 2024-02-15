@@ -107,7 +107,10 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
         add_global_info: bool,
         add_BC_info: bool,
         skip: bool = True,
-        k_heads: int = 1,
+        k_heads: Optional[int] = 1,
+        channels_per_head: Optional[int] = 1,
+        edge_in_channels: Optional[int] = None,
+        edge_out_channels: Optional[int] = None,
         aggr: str | List[str] | Aggregation | None = "mean", 
             *, aggr_kwargs: Dict[str, Any] | None = None, 
             flow: str = "source_to_target", node_dim: int = -2, decomposed_layers: int = 1, **kwargs):
@@ -122,13 +125,24 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
         self.add_global_info = add_global_info
         self.add_BC_info = add_BC_info
         self.skip = skip
+        self.k_heads = k_heads
+        self.edge_in_channels = edge_in_channels
+        self.edge_out_channels = edge_out_channels
+
         self.act_msg = nn.LeakyReLU()
         self.act_update = nn.LeakyReLU()
 
         if self.attention:
-            self.attention_mlp = nn.Linear(in_features=2*in_channels, out_features=1, 
-                                            bias=False)
-            self.act_attention = nn.LeakyReLU()
+            self.k_heads = k_heads
+            self.channels_per_head = channels_per_head
+            self.att_channels = self.k_heads * self.channels_per_head
+            self.Q_layer = nn.Linear(in_features=self.in_channels, out_features=self.att_channels, bias=False)
+            self.K_layer = nn.Linear(in_features=self.in_channels, out_features=self.att_channels, bias=False)
+            self.edge_layer = nn.Linear(in_features=self.edge_in_channels, out_features=self.k_heads, bias=False)
+            # self.mlp_attention = nn.Sequential(
+            #     nn.Linear(in_features=2*self.in_channels, out_features=self.att_channels, bias=False),
+            #     nn.LeakyReLU(),
+            #     nn.Linear(in_features=self.att_channels, out_features=self.k_heads, bias=False),)
 
 
     def forward(self, 
@@ -154,17 +168,11 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
             x_BC_x=x_BC_x,
             x_graph_i=x_graph_x,
             x_BC_i=x_BC_x,
-            x_idx_i=torch.arange(x.shape[0]),
+            x_idx_i=torch.unsqueeze(torch.arange(x.shape[0], device=x.device), 1),
         )
         return new_node_features
 
     def message(self, x_i, x_j, edge_attr, x_graph_i, x_BC_i, x_idx_i):
-
-        if self.attention:
-            attention_scores = self.attention_layer(torch.concat((x_i, x_j), dim=1))
-            attention_scores = self.act_attention(attention_scores)
-            attention_coefficients = scatter_softmax(attention_coefficients, x_idx_i)
-
 
         tmp = torch.concat((x_i, x_j, edge_attr), dim=1)
         if self.add_global_info:
@@ -174,6 +182,26 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
         
         msg = self.mlp(tmp)
         msg = self.act_msg(msg)
+
+        # split msg by head --> in the building of the layer choose mlp out channels as divisible by k_heads
+        # ex. each head has 4 channels --> 16 heads --> 64 total channels
+        # then multiply the first 4 channels of the message by the first channel of the attention coeff.
+
+        if self.attention:
+            # TODO: check if dimensions are right and apply it not to message but to input features????
+            shape = (x_i.shape[0], self.k_heads, self.channels_per_head)
+            Q = self.Q_layer(x_i).view(*shape)
+            K = self.K_layer(x_j).view(*shape)
+            A = torch.mul(Q, K).sum(dim=2)/self.channels_per_head**(1/2)
+            A += self.edge_layer(edge_attr)
+
+            attention_coefficients = pyg_utils.softmax(A, x_idx_i[:,0], dim=0) # n_nodes * k_heads coefficients
+            msg *= attention_coefficients.repeat_interleave(self.channels_per_head, dim=1)
+
+            # attention_scores = self.mlp_attention(torch.concat((x_i, x_j), dim=1))
+            # attention_coefficients = pyg_utils.softmax(attention_scores, x_idx_i[:,0], dim=0)
+            # msg *= attention_coefficients.repeat_interleave(self.channels_per_head, dim=1)
+
         return msg
 
     def update(self, msg, x, x_graph_x, x_BC_x):

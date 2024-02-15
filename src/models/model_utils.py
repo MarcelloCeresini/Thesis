@@ -6,6 +6,7 @@ import torch_geometric.nn as pyg_nn
 
 from torch.nn import Linear, ReLU, Sequential, LeakyReLU
 from torch_geometric.nn import GCNConv, NNConv
+from math import ceil
 
 from config_pckg.config_file import Config
 from .layers import MLPConv, Simple_MLPConv
@@ -104,25 +105,33 @@ def get_obj_from_structure(
                 case "Simple_MLPConv": # Simple_MLPConv_edges is deprecated
                     out_channels = str_d["out_channels"]
                     in_channels_mlp = 2*out_channels + conf["hyperparams"]["feature_dim"]
-                    in_channels_mlp_update = 2*out_channels
+                    in_channels_mlp_update = out_channels
                     if str_d["add_global_info"]: # this is because we use concatenation
                         in_channels_mlp += out_channels
                         in_channels_mlp_update += out_channels
                     if str_d["add_BC_info"]:
                         in_channels_mlp += out_channels
                         in_channels_mlp_update += out_channels
+
+                    if str_d["attention"]:
+                        out_channels_mlp = str_d["channels_per_head"] * str_d["k_heads"]
+                    else:
+                        out_channels_mlp = out_channels
+
                     _, mlp = get_obj_from_structure(
                                 in_channels=in_channels_mlp,
                                 str_d=str_d["nn"],
                                 conf=conf,
-                                out_channels=out_channels,
-                            )
+                                out_channels=out_channels_mlp,)
+                    
+                    in_channels_mlp_update += out_channels_mlp
+
                     _, mlp_update = get_obj_from_structure(
                                 in_channels=in_channels_mlp_update,
                                 str_d=str_d["nn_update"],
                                 conf=conf,
-                                out_channels=out_channels,
-                            )
+                                out_channels=out_channels,) # always out channels
+                    
                     obj = Simple_MLPConv(
                         in_channels=in_channels,
                         out_channels=out_channels,
@@ -133,6 +142,9 @@ def get_obj_from_structure(
                         add_BC_info=str_d["add_BC_info"],
                         skip=str_d["skip"],
                         k_heads=str_d["k_heads"],
+                        channels_per_head=str_d["channels_per_head"],
+                        att_channels=str_d["att_channels"],
+                        edge_in_channels=str_d["edge_in_channels"],
                         aggr=str_d["aggr"],
                     )
                     return out_channels, obj

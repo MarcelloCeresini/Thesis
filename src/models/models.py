@@ -39,6 +39,7 @@ class EncodeProcessDecode_Baseline(nn.Module):
 
         self.conf = conf
         self.model_structure = model_structure
+        self.add_self_loops = self.model_structure["add_self_loops"]
 
         current_dim, self.encoder = get_obj_from_structure(
             in_channels=input_dim, 
@@ -76,6 +77,10 @@ class EncodeProcessDecode_Baseline(nn.Module):
         BC_idxs = x_mask[:, -1]
         x = torch.concat([x, x_mask], dim=1)
 
+        if self.add_self_loops:
+            edge_index, edge_attr = pyg_utils.add_self_loops(edge_index, edge_attr, 
+                                                                fill_value=0.)
+
         X = {
             "x":            x,
             "edge_index":   edge_index,
@@ -99,14 +104,14 @@ class EncodeProcessDecode_Baseline(nn.Module):
 
         # FIXME: check if mean is done sample wise otherwise change it
         # BC is created at the beginning and never updated because it should encode the geometry (fixed during message passing)
-        X.update({"x_BC": scatter_mean(x_BC, batch_BC, dim=0)}) # batch_size x num_features
-        X.update({"x_graph": scatter_mean(X["x"], batch, dim=0)})
+        X.update({"x_BC": pyg_utils.scatter(x_BC, batch_BC, dim=0, reduce="mean")}) # batch_size x num_features
+        X.update({"x_graph": pyg_nn.pool.global_mean_pool(X["x"], batch)})
         
         # Process
         for _ in range(self.model_structure["message_passer"]["repeats_training"]):
             tmp = forward_for_general_layer(self.message_passer, X)
             X.update(tmp)
-            X.update({"x_graph": scatter_mean(X["x"], batch, dim=0)}) # Graph encoding is updated even when not used
+            X.update({"x_graph": pyg_nn.pool.global_mean_pool(X["x"], batch)}) # Graph encoding is updated even when not used
         
         # Decode
         tmp = forward_for_general_layer(self.decoder, X)

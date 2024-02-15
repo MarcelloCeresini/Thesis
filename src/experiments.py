@@ -58,8 +58,8 @@ if __name__ == "__main__":
     train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
         conf, load_from_disk=True)
     
-    # print results of last training
-    # model, model_conf, run_name = get_last_training(conf, from_checkpoints=True)
+    ######## print results of last training
+    # model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
     # model.cpu()
     # print(f"Last training: {run_name}")
 
@@ -71,10 +71,17 @@ if __name__ == "__main__":
     #             pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
     #             plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)
 
-    # try if the model works
-    full_conf = conf.get_tensorboard_logging_info()
-    model = get_model_instance(full_conf) # build model
-    model.to(conf.device)
-    for batch in train_dataloader:
-        break
-    model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
+    ######## try if the model works
+    # full_conf = conf.get_tensorboard_logging_info()
+    # model = get_model_instance(full_conf) # build model
+    # model.to(conf.device)
+    # for batch in train_dataloader:
+    #     break
+    # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
+    # print(model_summary)
+
+
+    ########## Convert msh to graph
+    
+
+    ######### update graphs

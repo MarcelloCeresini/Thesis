@@ -12,7 +12,7 @@ from torch.optim import Adam
 import torch.optim.lr_scheduler as lr_scheduler 
 from torch.masked import masked_tensor
 
-from utils import print_memory_state_gpu, get_input_to_model
+from utils import print_memory_state_gpu, get_input_to_model, get_forces
 from config_pckg.config_file import Config 
 
 
@@ -50,6 +50,8 @@ def write_metric_results(metric_results, writer, epoch, split="val") -> None:
 
 def test(loader: pyg_data.DataLoader, model, conf):
     metric_dict = deepcopy(conf.metric_dict)
+    raise NotImplementedError("Check if aero metric works")
+    metric_aero = conf.metric_aero
 
     with torch.no_grad():
         total_loss = 0
@@ -62,11 +64,16 @@ def test(loader: pyg_data.DataLoader, model, conf):
             loss = model.loss(pred, labels)
             total_loss += loss.item() * batch.num_graphs
             metric_dict = forward_metric_results(pred.cpu(), labels.cpu(), conf, metric_dict)
+            
+            for data in batch:
+                metric_aero.forward(pred=get_forces(conf, data, pred[:,-1]), 
+                                    label=batch.force_on_component)
 
         total_loss /= len(loader.dataset)
         metric_results = compute_metric_results(metric_dict, conf)
 
-    del metric_dict
+        metric_results.update(metric_aero.compute())
+
     return total_loss, metric_results
 
 
@@ -133,9 +140,13 @@ def train(
         writer.add_scalar("epoch", epoch, epoch) # learning rate
         writer.add_scalar("num_bad_epochs/lr_scheduler", scheduler.num_bad_epochs, epoch)
         writer.add_scalar("num_bad_epochs/end_of_training", scheduler_for_training_end.num_bad_epochs, epoch)
-
+        writer.add_scalar("GPU_occ/allocated", torch.cuda.memory_allocated()/1024**3, epoch)
+        writer.add_scalar("GPU_occ/reserved", torch.cuda.memory_reserved()/1024**3, epoch)
+        
+        torch.cuda.empty_cache()
         if epoch % conf.hyper_params["val"]["n_epochs_val"] == 0:
             val_loss, metric_results = test(val_loader, model, conf)
+            torch.cuda.empty_cache()
 
             if val_loss < best_loss:
                 best_loss = val_loss
@@ -144,7 +155,6 @@ def train(
                 torch.save(model.state_dict(), model_save_path)
             writer.add_scalar(f"{conf.hyper_params['loss']}/val", val_loss, epoch)
             write_metric_results(metric_results, writer, epoch)
-            del metric_results
         
         if scheduler_for_training_end.num_bad_epochs >= scheduler_for_training_end.patience:
             print(f"Restoring best weights of epoch {best_epoch}")
