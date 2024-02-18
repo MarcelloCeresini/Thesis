@@ -11,7 +11,7 @@ from config_pckg.config_file import Config
 from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph
 
 
-def convert_all_msh_to_meshComplete(conf: Config(), input_dir: Optional[str] = None, output_dir: Optional[str] = None, input_filenames: Optional[list[str]] = None):
+def convert_all_msh_to_meshComplete(conf: Config(), output_dir: str, input_dir: Optional[str] = None, input_filenames: Optional[list[str]] = None):
 
     if input_dir is not None:
         input_filenames = glob.glob(os.path.join(input_dir, "*.msh"))
@@ -32,12 +32,11 @@ def convert_all_msh_to_meshComplete(conf: Config(), input_dir: Optional[str] = N
             meshComplete_filename = os.path.join(output_dir, msh_name+".pkl")
         else:
             meshComplete_filename = None
-        
-        meshCompleteInstance = convert_msh_to_mesh_complete_info_obj(conf, filename, meshComplete_filename)
-        
-        obj_list.append(meshCompleteInstance)
 
-    return obj_list
+        if msh_name < "2dtc_002R077_001_s01":
+            continue
+        else:
+            meshCompleteInstance = convert_msh_to_mesh_complete_info_obj(conf, filename, meshComplete_filename)
 
 
 if __name__ == "__main__":
@@ -45,11 +44,14 @@ if __name__ == "__main__":
 
     meshComplete_objs = convert_all_msh_to_meshComplete(
         conf, 
+        output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE,
         input_dir=conf.EXTERNAL_FOLDER_MSH, 
-        output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE
     )
     
-    for obj in (pbar := tqdm(meshComplete_objs)):
+    input_filenames = glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE, "*.pkl"))
+    for filename in (pbar := tqdm(input_filenames)):
+        with open(filename, "rb") as f:
+            obj = pickle.load(f)
         pbar.set_description(f"Adding labels to : {obj.name}")
         if obj.name not in conf.problematic_files:
             obj.add_labels(os.path.join(conf.EXTERNAL_FOLDER_CSV, obj.name+"_cell_values_at300.csv"))
