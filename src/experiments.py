@@ -62,20 +62,18 @@ if __name__ == "__main__":
         )
     print("done")
     
-    pass
-    
-    ######## print results of last training
-    # model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
-    # model.cpu()
-    # print(f"Last training: {run_name}")
+    ####### print results of last training
+    model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
+    model.cpu()
+    print(f"Last training: {run_name}")
 
-    # for batch in tqdm(test_dataloader):
-    #     pred_batch = model(**get_input_to_model(batch))
-    #     for i in range(len(batch)):
-    #         with torch.no_grad():
-    #             data = batch[i]
-    #             pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
-    #             plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)
+    for batch in tqdm(test_dataloader):
+        pred_batch = model(**get_input_to_model(batch))
+        for i in range(len(batch)):
+            with torch.no_grad():
+                data = batch[i]
+                pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
+                plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)
 
     ######## try if the model works
     # full_conf = conf.get_tensorboard_logging_info()

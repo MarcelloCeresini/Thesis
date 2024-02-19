@@ -55,11 +55,13 @@ def test(loader: pyg_data.DataLoader, model, conf):
     metric_dict = deepcopy(conf.metric_dict)
     metric_aero = conf.metric_aero
 
+    device = list(model.parameters())[0].device
+
     with torch.no_grad():
         total_loss = 0
         model.eval()
         for batch in loader:
-            batch.to(conf.device)
+            batch.to(device)
             input_to_model = get_input_to_model(batch)
             pred = model(**input_to_model)
             
@@ -130,7 +132,7 @@ def train(
         model.train()
         for batch in tqdm(train_loader, leave=False, desc="Batch in epoch", position=1):
             batch.to(conf.device)
-            opt.zero_grad()
+            opt.zero_grad(set_to_none=True)
             input_to_model = get_input_to_model(batch)
             pred = model(**input_to_model)
             labels = clean_labels(batch, model.conf)

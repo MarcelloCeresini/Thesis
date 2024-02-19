@@ -22,14 +22,14 @@ def print_w_time(str):
 
 if __name__ == "__main__":
 
-    for msg_passing_steps in tqdm([1, 3, 5, 7, 10, 15]):
-        print_w_time(f"Starting training with {msg_passing_steps} message passing steps")
+    # for msg_passing_steps in tqdm([1, 3, 5, 7, 10, 15]):
+        # print_w_time(f"Starting training with {msg_passing_steps} message passing steps")
         conf = Config()
 
         full_conf = conf.get_tensorboard_logging_info()
 
         ###################
-        full_conf["model"]["message_passer"]["repeats_training"] = msg_passing_steps
+        # full_conf["model"]["message_passer"]["repeats_training"] = msg_passing_steps
         ###################
 
         hparams_flattened = json_normalize(full_conf).to_dict(orient="records")[0]
@@ -74,7 +74,6 @@ if __name__ == "__main__":
         layout["Standard Layout"]["epoch"] = ["Multiline", ["epoch"]]
         layout["Standard Layout"]["num_bad_epochs"] = ["Multiline", ["num_bad_epochs/lr_scheduler", "num_bad_epochs/end_of_training"]]
         layout["Standard Layout"]["GPU_occ"] = ["Multiline", ["GPU_occ/allocated", "GPU_occ/reserved"]]
-
 
         writer.add_custom_scalars(layout)
         ### TENSORBOARD SETUP END ####

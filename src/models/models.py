@@ -40,17 +40,36 @@ class EncodeProcessDecode_Baseline(nn.Module):
         self.conf = conf
         self.model_structure = model_structure
         self.add_self_loops = self.model_structure["add_self_loops"]
+        self.update_edges = self.model_structure["update_edges"] if "update_edges" in self.model_structure.keys() else False
+        if self.update_edges:
+            self.edges_channels = self.model_structure["edges_channels"]
 
         current_dim, self.encoder = get_obj_from_structure(
             in_channels=input_dim, 
             str_d=model_structure["encoder"],
             conf=conf,
-            out_channels=model_structure["message_passer"]["out_channels"]
+            out_channels=model_structure["message_passer"]["out_channels"],
         )
+
+        message_passer_structure = model_structure["message_passer"]
+        if self.update_edges:
+            _, self.edge_encoder = get_obj_from_structure(
+                in_channels=conf["hyperparams"]["edge_feature_dim"], 
+                str_d=model_structure["edge_encoder"],
+                conf=conf,
+                out_channels=self.edges_channels
+            )
+            message_passer_structure.update({
+                "update_edges": True,
+                "edges_channels": self.edges_channels,
+            })
+        else:
+            message_passer_structure.update({
+                "update_edges": False,})
         
         current_dim, self.message_passer = get_obj_from_structure(
             in_channels=current_dim, 
-            str_d=model_structure["message_passer"],
+            str_d=message_passer_structure,
             conf=conf,
         )
         
@@ -93,6 +112,10 @@ class EncodeProcessDecode_Baseline(nn.Module):
         # Encode features
         tmp = forward_for_general_layer(self.encoder, X)
         X.update(tmp)
+
+        if self.update_edges:
+            tmp = forward_for_general_layer(self.edge_encoder, {"edge_attr": X["edge_attr"]})
+            X.update(tmp)
 
         # Create graph-level and 'boundary' features
         # TODO: improve "boundary" by inserting relative distance (through pos) in computation

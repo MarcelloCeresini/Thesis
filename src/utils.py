@@ -500,6 +500,7 @@ def denormalize_labels(labels, conf):
 
 
 def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf, run_name: Optional[str]= None):
+    data.name = data.name.removesuffix("_ascii.msh")
     with open(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, data.name+".pkl"), "rb") as f:
         meshCI = pickle.load(f)
         

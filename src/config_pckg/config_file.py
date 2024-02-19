@@ -241,7 +241,7 @@ class Config():
         logged_hyperparams.update({
             "input_dim": self.input_dim,
             "output_dim": self.output_dim,
-            "feature_dim": len(self.graph_edge_attr_list),
+            "edge_feature_dim": len(self.graph_edge_attr_list),
             "label_dim": len(self.labels_to_keep_for_training)
         })
 

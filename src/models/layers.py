@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional, Union
 import torch
+from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules import Module
@@ -99,38 +100,39 @@ class MLPConv(pyg_nn.MessagePassing):
 
 class Simple_MLPConv(pyg_nn.MessagePassing):
     def __init__(self,     
-        in_channels,
-        out_channels,
+        hidden_channels,
         mlp: nn.Module,
         mlp_update: nn.Module,
         attention: bool,
         add_global_info: bool,
         add_BC_info: bool,
+        update_edges: Optional[bool] = None,
+        mlp_edges: Optional[nn.Module] = None,
         skip: bool = True,
         k_heads: Optional[int] = 1,
         channels_per_head: Optional[int] = 1,
         edge_in_channels: Optional[int] = None,
-        edge_out_channels: Optional[int] = None,
         aggr: str | List[str] | Aggregation | None = "mean", 
             *, aggr_kwargs: Dict[str, Any] | None = None, 
             flow: str = "source_to_target", node_dim: int = -2, decomposed_layers: int = 1, **kwargs):
         super().__init__(aggr, aggr_kwargs=aggr_kwargs, flow=flow, node_dim=node_dim, 
                         decomposed_layers=decomposed_layers, **kwargs)
 
-        self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.in_channels = hidden_channels
         self.mlp = mlp
         self.mlp_update = mlp_update
         self.attention = attention
         self.add_global_info = add_global_info
         self.add_BC_info = add_BC_info
+        self.update_edges = update_edges
+        self.mlp_edges = mlp_edges
         self.skip = skip
         self.k_heads = k_heads
         self.edge_in_channels = edge_in_channels
-        self.edge_out_channels = edge_out_channels
 
         self.act_msg = nn.LeakyReLU()
         self.act_update = nn.LeakyReLU()
+        self.act_edge_update = nn.LeakyReLU()
 
         if self.attention:
             self.k_heads = k_heads
@@ -154,8 +156,8 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
             batch: Optional[torch.Tensor],
             *args, **kwargs) -> Any:
         
-        x_graph_x = x_graph[batch]  if self.add_global_info     else torch.zeros((x.shape[0], 1)).to(device=x.get_device())
-        x_BC_x = x_BC[batch]        if self.add_BC_info         else torch.zeros((x.shape[0], 1)).to(device=x.get_device())
+        x_graph_x = x_graph[batch]  if self.add_global_info     else torch.zeros((x.shape[0], 1)).to(device=x.device)
+        x_BC_x = x_BC[batch]        if self.add_BC_info         else torch.zeros((x.shape[0], 1)).to(device=x.device)
 
         new_node_features = self.propagate(
             edge_index, 
@@ -170,7 +172,19 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
             x_BC_i=x_BC_x,
             x_idx_i=torch.unsqueeze(torch.arange(x.shape[0], device=x.device), 1),
         )
-        return new_node_features
+
+        if self.update_edges:
+            new_edge_features = self.edge_updater(
+                edge_index,
+                size=(x.shape[0], x.shape[0]),
+                x_i=x,
+                x_j=x,
+                edge_attr=edge_attr, # TODO: add graph and BC also here?
+                )
+        else:
+            new_edge_features = edge_attr
+        return {"x": new_node_features, "edge_attr": new_edge_features}
+
 
     def message(self, x_i, x_j, edge_attr, x_graph_i, x_BC_i, x_idx_i):
 
@@ -204,7 +218,7 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
 
         return msg
 
-    def update(self, msg, x, x_graph_x, x_BC_x):
+    def update(self, msg, x, x_graph_x, x_BC_x)-> Tensor:
         tmp = torch.concat((x, msg), dim=1)
         if self.add_global_info:
             tmp = torch.concat((tmp, x_graph_x), dim=1)
@@ -216,3 +230,14 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
             update += x
         update = self.act_update(update)
         return update
+
+
+    def edge_update(self, x_i, x_j, edge_attr) -> Tensor:
+        tmp = torch.concat((edge_attr, x_i, x_j), dim=1)
+
+        update = self.mlp_edges(tmp)
+        if self.skip:
+            update += edge_attr
+        update = self.act_edge_update(update)
+        return update
+        

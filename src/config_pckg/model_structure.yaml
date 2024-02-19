@@ -1,18 +1,26 @@
 name: EncodeProcessDecode_Baseline
 add_self_loops: False
+update_edges: True
+edges_channels: 16
 encoder:
   type: sequential_model
   layers: 
     # PUT A HIGHER NUMBER HERE --> at least 32 because it enters with ~160 channels
-    - {type: layer, name: Linear, out_features: 64} 
+    - {type: layer, name: Linear, out_features: 64}
     - {type: layer, name: LeakyReLU}
     # Last layer to get out_channels = message_passer["out_channels"] is automatic
+
+edge_encoder:
+  type: sequential_model
+  layers: 
+    - {type: layer, name: Linear, out_features: 8} 
+    - {type: layer, name: LeakyReLU}
+
 message_passer:
   type: repeated_shared_layer
-  repeats_training: 5
+  repeats_training: 10
   name: Simple_MLPConv # [NNConv, GCNConv, MLPConv, Simple_MLPConv_edges]
-  out_channels: 16 # also in_channels are the same, to be able to call multiple times
-  mid_channels: 16
+  out_channels: 32 # also in_channels are the same, to be able to call multiple times
   attention: False
   k_heads: 4
   channels_per_head: 16
@@ -25,13 +33,18 @@ message_passer:
   nn: # takes as input edge_features (and does NOT update them, always gets edge features)
     type: sequential_model
     layers: 
-      - {type: layer, name: Linear, out_features: 16}
+      - {type: layer, name: Linear, out_features: 32}
       - {type: layer, name: LeakyReLU}
       # Last (Linear) layer for internal_mlp is always added autonomously
   nn_update:
     type: sequential_model
     layers: 
-      - {type: layer, name: Linear, out_features: 16}
+      - {type: layer, name: Linear, out_features: 32}
+      - {type: layer, name: LeakyReLU}
+  nn_edges:
+    type: sequential_model
+    layers: 
+      - {type: layer, name: Linear, out_features: 8}
       - {type: layer, name: LeakyReLU}
 
 decoder:

@@ -104,8 +104,15 @@ def get_obj_from_structure(
                     return out_channels, obj
                 case "Simple_MLPConv": # Simple_MLPConv_edges is deprecated
                     out_channels = str_d["out_channels"]
-                    in_channels_mlp = 2*out_channels + conf["hyperparams"]["feature_dim"]
+                    update_edges = str_d["update_edges"]
+                    edge_channels = str_d["edges_channels"] if update_edges else conf["hyperparams"]["feature_dim"]
+                    # FIXME: remove line above and add line below
+                    # edge_channels = str_d["edges_channels"] if update_edges else conf["hyperparams"]["edge_feature_dim"]
+
+                    in_channels_mlp = 2*out_channels + edge_channels
                     in_channels_mlp_update = out_channels
+                    in_channels_mlp_edges = 2*out_channels + edge_channels
+
                     if str_d["add_global_info"]: # this is because we use concatenation
                         in_channels_mlp += out_channels
                         in_channels_mlp_update += out_channels
@@ -132,19 +139,26 @@ def get_obj_from_structure(
                                 conf=conf,
                                 out_channels=out_channels,) # always out channels
                     
+                    if update_edges:
+                        _, mlp_edges = get_obj_from_structure(
+                                    in_channels=in_channels_mlp_edges,
+                                    str_d=str_d["nn_edges"],
+                                    conf=conf,
+                                    out_channels=edge_channels,)
+                    
                     obj = Simple_MLPConv(
-                        in_channels=in_channels,
-                        out_channels=out_channels,
+                        hidden_channels=in_channels,
                         mlp=mlp,
                         mlp_update=mlp_update,
+                        mlp_edges=mlp_edges if update_edges else None,
                         attention=str_d["attention"],
                         add_global_info=str_d["add_global_info"],
                         add_BC_info=str_d["add_BC_info"],
+                        update_edges=str_d["update_edges"],
                         skip=str_d["skip"],
                         k_heads=str_d["k_heads"],
                         channels_per_head=str_d["channels_per_head"],
-                        att_channels=str_d["att_channels"],
-                        edge_in_channels=str_d["edge_in_channels"],
+                        edge_in_channels=edge_channels,
                         aggr=str_d["aggr"],
                     )
                     return out_channels, obj
@@ -157,7 +171,7 @@ def get_obj_from_structure(
 def forward_for_general_layer(layer, X_dict):
     match layer:
         case Simple_MLPConv():
-            x = layer(
+            return layer(
                 x=          X_dict["x"], 
                 edge_index= X_dict["edge_index"], 
                 edge_attr=  X_dict["edge_attr"],
@@ -165,7 +179,6 @@ def forward_for_general_layer(layer, X_dict):
                 x_BC=       X_dict["x_BC"],
                 batch=      X_dict["batch"],
             )
-            return {"x": x}
         case MLPConv():
             x = layer(
                 x=          X_dict["x"], 
@@ -190,14 +203,11 @@ def forward_for_general_layer(layer, X_dict):
                 edge_attr=  X_dict["edge_attr"],
             )
             return {"x": x}
-        case Sequential():
-            return {"x": layer(X_dict["x"])}
-        case Linear():
-            return {"x": layer(X_dict["x"])}
-        case ReLU():
-            return {"x": layer(X_dict["x"])}
-        case LeakyReLU():
-            return {"x": layer(X_dict["x"])}
-        case _:
-            raise NotImplementedError()
-        
+        case Sequential() | Linear() | ReLU() | LeakyReLU():
+            if "x" in X_dict.keys():
+                return {"x": layer(X_dict["x"])}
+            elif "edge_attr" in X_dict.keys():
+                return {"edge_attr": layer(X_dict["edge_attr"])}
+            else:
+                raise NotImplementedError("Only 'x' and 'edge_attr' are implemented")
+            
