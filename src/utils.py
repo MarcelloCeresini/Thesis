@@ -521,27 +521,37 @@ def get_inward_normal_areas(
     faces_x_component = faces_x_component[faces_idxs]
     faces_y_component = faces_y_component[faces_idxs]
 
-    normal_to_surface = np.stack((-faces_y_component, faces_x_component), axis=1)
-    opposite_normal_to_surface = np.stack((faces_y_component, -faces_x_component), axis=1)
+    CcFc_edges = torch.tensor(CcFc_edges)
+    normal_to_surface = torch.stack((-faces_y_component, faces_x_component), axis=1)
+    opposite_normal_to_surface = torch.stack((faces_y_component, -faces_x_component), axis=1)
 
-    CcFc_edges_component = CcFc_edges[CcFc_edges[:,2] == faces_idxs]
-    CcFc_vectors = face_center_positions[CcFc_edges_component[:,1]] - cell_center_positions[CcFc_edges_component[:,0]]
+    in_tensor = CcFc_edges[:,1].view((CcFc_edges[:,1].shape[0], 1))
+    vectorized_func = torch.vmap(lambda x: (x == faces_idxs).sum() > 0)
+    CcFc_edges_indexes_of_surface_faces =  vectorized_func(in_tensor)
 
-    inward_normals = np.where(np.tensordot(normal_to_surface, CcFc_vectors, axes=[1, 1]), normal_to_surface, opposite_normal_to_surface)
+    CcFc_edges_component = CcFc_edges[CcFc_edges_indexes_of_surface_faces]
+    CcFc_vectors = torch.tensor(face_center_positions[CcFc_edges_component[:,1]][:,:2] - 
+                                    cell_center_positions[CcFc_edges_component[:,0]][:,:2])
 
-    return inward_normals*face_areas[faces_idxs]
+    inward_normals = torch.where(
+        ((normal_to_surface*CcFc_vectors).sum(dim=1) > 0).view(-1,1).repeat(1,2), 
+            normal_to_surface, opposite_normal_to_surface)
+
+    return inward_normals*face_areas[faces_idxs].view(-1,1).repeat(1,2)
 
 
 def get_forces(conf:Config, data:Data, pressure_values):
 
-    flap_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_flap"]]
-    tyre_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_tyre"]]
+    flap_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_flap"]].nonzero()[:,0]
+    tyre_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_tyre"]].nonzero()[:,0]
     return_dict = {
-        "flap": torch.sum((data.inward_normal_areas[flap_faces], pressure_values[flap_faces]), dim=0),
-        "tyre": torch.sum((data.inward_normal_areas[tyre_faces], pressure_values[tyre_faces]), dim=0),}
+        "flap": torch.sum((data.inward_normal_areas[flap_faces]*
+                                pressure_values[flap_faces].view(-1,1).repeat(1,2)), dim=0),
+        "tyre": torch.sum((data.inward_normal_areas[tyre_faces]*
+                                pressure_values[tyre_faces].view(-1,1).repeat(1,2)), dim=0),}
 
     return_dict["car"] = torch.sum(
-        torch.stack(data.force_on_component.values(), dim=0), dim=0)
+        torch.stack(list(return_dict.values()), dim=0), dim=0)
     
     return return_dict
 
@@ -595,7 +605,7 @@ def convert_mesh_complete_info_obj_to_graph(
 
             data.inward_normal_areas = torch.zeros((data.x.shape[0], 2))
 
-            surface_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_car"]]
+            surface_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_car"]].nonzero()[:,0]
             data.inward_normal_areas[surface_faces, :] = get_inward_normal_areas(
                 faces_idxs=surface_faces,
                 face_areas=data.x[:, conf.graph_node_feature_dict["face_area"]],

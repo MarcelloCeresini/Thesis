@@ -4,7 +4,7 @@ encoder:
   type: sequential_model
   layers: 
     # PUT A HIGHER NUMBER HERE --> at least 32 because it enters with ~160 channels
-    - {type: layer, name: Linear, out_features: 16} 
+    - {type: layer, name: Linear, out_features: 64} 
     - {type: layer, name: LeakyReLU}
     # Last layer to get out_channels = message_passer["out_channels"] is automatic
 message_passer:
@@ -13,7 +13,7 @@ message_passer:
   name: Simple_MLPConv # [NNConv, GCNConv, MLPConv, Simple_MLPConv_edges]
   out_channels: 16 # also in_channels are the same, to be able to call multiple times
   mid_channels: 16
-  attention: True
+  attention: False
   k_heads: 4
   channels_per_head: 16
   att_channels: 16

@@ -67,6 +67,7 @@ if __name__ == "__main__":
                         for metric_name in conf.metrics
             }
         }
+        layout["Standard Layout"]["efficiency_MAPE"] = ["Multiline", ["efficiency_MAPE/flap", "efficiency_MAPE/tyre", "efficiency_MAPE/car"]]
         layout["Standard Layout"][f"{full_conf['hyperparams']['loss']}"] = \
             ["Multiline", [f"{full_conf['hyperparams']['loss']}/{s}" for s in splits]]
         layout["Standard Layout"]["lr"] = ["Multiline", ["lr"]]
@@ -74,13 +75,15 @@ if __name__ == "__main__":
         layout["Standard Layout"]["num_bad_epochs"] = ["Multiline", ["num_bad_epochs/lr_scheduler", "num_bad_epochs/end_of_training"]]
         layout["Standard Layout"]["GPU_occ"] = ["Multiline", ["GPU_occ/allocated", "GPU_occ/reserved"]]
 
+
         writer.add_custom_scalars(layout)
         ### TENSORBOARD SETUP END ####
 
         print_w_time("GETTING DATALOADERS")
         train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
             conf, 
-            load_from_disk=True
+            save_to_disk=False,
+            load_from_disk=True,
         )
         print_memory_state_gpu("After DataLoaders", conf)
 
@@ -91,6 +94,7 @@ if __name__ == "__main__":
 
         print_w_time("WRITING GRAPH SUMMARY")
         for batch in train_dataloader:
+            batch.to(conf.device)
             break
         # writer.add_graph(model, input_to_model=input_to_model, use_strict_trace=False)
         model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
@@ -114,13 +118,21 @@ if __name__ == "__main__":
 
             # TODO: save to wandb all the images of the test set for all trials that reach this point
 
-            metric_dict = {
-                    f"test/{metric_name}/{label_name}": label_metric_value
-                        for metric_name, labels_dict in metric_results.items()
-                            for label_name, label_metric_value in labels_dict.items()
-                }
+            metric_dict = {}
+            for metric_name, metric_res_subdict in metric_results.items():
+                if isinstance(metric_res_subdict, dict):
+                    for column, result in metric_res_subdict.items():
+                        metric_dict[f"test/{metric_name}/{column}"] = result
+                else:
+                    metric_dict[f"test/{metric_name}"] = metric_res_subdict
 
-            metric_dict.update({f"test/{full_conf['hyperparams']['loss']}": test_loss})
+            # metric_dict = {
+            #         f"test/{metric_name}/{label_name}": label_metric_value
+            #             for metric_name, labels_dict in metric_results.items()
+            #                 for label_name, label_metric_value in labels_dict.items()
+            #     }
+
+            metric_dict[f"test/{full_conf['hyperparams']['loss']}"]= test_loss
 
             writer.add_hparams(
                 hparam_dict=hparams_flattened,

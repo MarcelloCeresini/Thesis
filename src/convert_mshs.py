@@ -33,40 +33,45 @@ def convert_all_msh_to_meshComplete(conf: Config(), output_dir: str, input_dir: 
         else:
             meshComplete_filename = None
 
-        if msh_name < "2dtc_002R077_001_s01":
-            continue
-        else:
-            meshCompleteInstance = convert_msh_to_mesh_complete_info_obj(conf, filename, meshComplete_filename)
+        # if msh_name < "2dtc_002R077_001_s01":
+        #     continue
+        # else:
+        #     meshCompleteInstance = convert_msh_to_mesh_complete_info_obj(conf, filename, meshComplete_filename)
+        meshCompleteInstance = convert_msh_to_mesh_complete_info_obj(conf, filename, meshComplete_filename)
 
 
 if __name__ == "__main__":
     conf = Config()
 
-    meshComplete_objs = convert_all_msh_to_meshComplete(
-        conf, 
-        output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE,
-        input_dir=conf.EXTERNAL_FOLDER_MSH, 
-    )
+    #################### 1
+    # meshComplete_objs = convert_all_msh_to_meshComplete(
+    #     conf, 
+    #     output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE,
+    #     input_dir=conf.EXTERNAL_FOLDER_MSH, 
+    # )
     
-    input_filenames = glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE, "*.pkl"))
-    for filename in (pbar := tqdm(input_filenames)):
-        with open(filename, "rb") as f:
-            obj = pickle.load(f)
-        pbar.set_description(f"Adding labels to : {obj.name}")
-        if obj.name not in conf.problematic_files:
-            obj.add_labels(os.path.join(conf.EXTERNAL_FOLDER_CSV, obj.name+"_cell_values_at300.csv"))
-            obj.save_to_disk(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, obj.name+".pkl"))
+    #################### 2
+    # input_filenames = glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE, "*.pkl"))
+    # for filename in (pbar := tqdm(input_filenames)):
+    #     with open(filename, "rb") as f:
+    #         obj = pickle.load(f)
+    #     name = obj.name.split(".")[0].removesuffix("_ascii")
+    #     pbar.set_description(f"Adding labels to : {name}")
+    #     if name not in conf.problematic_files:
+    #         obj.add_labels(os.path.join(conf.EXTERNAL_FOLDER_CSV, name+"_cell_values_at300.csv"))
+    #         obj.save_to_disk(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, name+".pkl"))
 
-
+    #################### 3
     # meshComplete_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, "*.pkl")))
     # for path in (pbar := tqdm(meshComplete_paths)):
     #     with open(path, "rb") as f:
     #         obj = pickle.load(f)
     #     pbar.set_description(f"Creating graph of : {obj.name}")
+    #     name = obj.name.split(".")[0].removesuffix("_ascii")
     #     convert_mesh_complete_info_obj_to_graph(
     #         conf,
     #         obj,
-    #         filename_output_graph=os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, obj.name+".pt"),
+    #         filename_output_graph=os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, name+".pt"),
     #     )
 
 

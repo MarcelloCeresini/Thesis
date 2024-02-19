@@ -42,10 +42,5 @@ def get_data_loaders(conf: Config, load_from_disk = False, save_to_disk = False)
                             batch_size=conf.hyper_params["val"]["batch_size"])
     test_dataloader = DataLoader(data_list_test, 
                             batch_size=1)
-    
-    for data in train_dataloader.dataset:
-        data.to(conf.device)
-    for data in val_dataloader.dataset:
-        data.to(conf.device)
 
     return train_dataloader, val_dataloader, test_dataloader

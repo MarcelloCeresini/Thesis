@@ -56,7 +56,13 @@ if __name__ == "__main__":
 
     print("Getting dataloaders")
     train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
-        conf, load_from_disk=True)
+            conf, 
+            save_to_disk=False,
+            load_from_disk=True,
+        )
+    print("done")
+    
+    pass
     
     ######## print results of last training
     # model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)

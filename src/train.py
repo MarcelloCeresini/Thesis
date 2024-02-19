@@ -44,19 +44,22 @@ def compute_metric_results(metric_dict, conf):
 def write_metric_results(metric_results, writer, epoch, split="val") -> None:
     # TODO: add also global writing when global is implemented
     for metric_name, metric_res_subdict in metric_results.items():
-        for column, result in metric_res_subdict.items():
-            writer.add_scalar(f"{metric_name}/{split}/{column}", result, epoch)
+        if isinstance(metric_res_subdict, dict):
+            for column, result in metric_res_subdict.items():
+                writer.add_scalar(f"{metric_name}/{split}/{column}", result, epoch)
+        else:
+            writer.add_scalar(metric_name, metric_res_subdict, epoch)
 
 
 def test(loader: pyg_data.DataLoader, model, conf):
     metric_dict = deepcopy(conf.metric_dict)
-    raise NotImplementedError("Check if aero metric works")
     metric_aero = conf.metric_aero
 
     with torch.no_grad():
         total_loss = 0
         model.eval()
         for batch in loader:
+            batch.to(conf.device)
             input_to_model = get_input_to_model(batch)
             pred = model(**input_to_model)
             
@@ -65,14 +68,17 @@ def test(loader: pyg_data.DataLoader, model, conf):
             total_loss += loss.item() * batch.num_graphs
             metric_dict = forward_metric_results(pred.cpu(), labels.cpu(), conf, metric_dict)
             
-            for data in batch:
+            for i in range(len(batch)):
+                data = batch[i]
                 metric_aero.forward(pred=get_forces(conf, data, pred[:,-1]), 
-                                    label=batch.force_on_component)
+                                    label=data.force_on_component)
+                
+            batch.cpu()
 
         total_loss /= len(loader.dataset)
         metric_results = compute_metric_results(metric_dict, conf)
-
-        metric_results.update(metric_aero.compute())
+        metric_aero_dict = metric_aero.compute()
+        metric_results.update({"efficiency_MAPE/"+k:v for k,v in metric_aero_dict.items()})
 
     return total_loss, metric_results
 
@@ -123,6 +129,7 @@ def train(
         total_loss = 0
         model.train()
         for batch in tqdm(train_loader, leave=False, desc="Batch in epoch", position=1):
+            batch.to(conf.device)
             opt.zero_grad()
             input_to_model = get_input_to_model(batch)
             pred = model(**input_to_model)
@@ -131,6 +138,7 @@ def train(
 
             loss.backward()
             opt.step()
+            batch.cpu()
 
             total_loss += loss.item() * batch.num_graphs
 
