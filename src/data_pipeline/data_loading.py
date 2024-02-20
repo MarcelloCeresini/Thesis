@@ -37,9 +37,7 @@ def get_data_loaders(conf: Config, load_from_disk = False, save_to_disk = False)
     
     train_dataloader = DataLoader(data_list_train, 
                             batch_size=conf.hyper_params["training"]["batch_size"],
-                            shuffle=True,
-                            num_workers=os.cpu_count(),
-                            pin_memory=True)
+                            shuffle=True,)
     val_dataloader  = DataLoader(data_list_val,  
                             batch_size=conf.hyper_params["val"]["batch_size"])
     test_dataloader = DataLoader(data_list_test, 

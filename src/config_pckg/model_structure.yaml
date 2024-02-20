@@ -1,7 +1,7 @@
 name: EncodeProcessDecode_Baseline
 add_self_loops: False
 update_edges: True
-edges_channels: 16
+edges_channels: 8
 encoder:
   type: sequential_model
   layers: 
@@ -18,7 +18,7 @@ edge_encoder:
 
 message_passer:
   type: repeated_shared_layer
-  repeats_training: 10
+  repeats_training: 9
   name: Simple_MLPConv # [NNConv, GCNConv, MLPConv, Simple_MLPConv_edges]
   out_channels: 32 # also in_channels are the same, to be able to call multiple times
   attention: False
