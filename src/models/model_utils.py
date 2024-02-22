@@ -105,9 +105,9 @@ def get_obj_from_structure(
                 case "Simple_MLPConv": # Simple_MLPConv_edges is deprecated
                     out_channels = str_d["out_channels"]
                     update_edges = str_d["update_edges"]
-                    edge_channels = str_d["edges_channels"] if update_edges else conf["hyperparams"]["feature_dim"]
-                    # FIXME: remove line above and add line below
-                    # edge_channels = str_d["edges_channels"] if update_edges else conf["hyperparams"]["edge_feature_dim"]
+                    # edge_channels = str_d["edges_channels"] if update_edges else conf["hyperparams"]["feature_dim"]
+                    #### If it doesn't work, remove line below and add line above
+                    edge_channels = str_d["edges_channels"] if update_edges else conf["hyperparams"]["edge_feature_dim"]
 
                     in_channels_mlp = 2*out_channels + edge_channels
                     in_channels_mlp_update = out_channels

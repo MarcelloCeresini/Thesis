@@ -72,7 +72,8 @@ def test(loader: pyg_data.DataLoader, model, conf):
             
             for i in range(len(batch)):
                 data = batch[i]
-                metric_aero.forward(pred=get_forces(conf, data, pred[:,-1]), 
+                pred_sample_pressure = pred[batch.ptr[i]:batch.ptr[i+1], -1]
+                metric_aero.forward(pred=get_forces(conf, data, pred_sample_pressure), 
                                     label=data.force_on_component)
                 
             batch.cpu()
@@ -92,6 +93,8 @@ def train(
         writer: SummaryWriter, 
         conf: Config):
     run_name = os.path.basename(os.path.normpath(writer.get_logdir()))
+    if not os.path.isdir(os.path.join(conf.DATA_DIR, "model_checkpoints")):
+        os.mkdir(os.path.join(conf.DATA_DIR, "model_checkpoints"))
     os.mkdir(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name))
     # with wandb.init(**conf.get_logging_info()):
 

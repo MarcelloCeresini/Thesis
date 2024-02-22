@@ -211,10 +211,10 @@ class Config():
             self.split_idxs = pickle.load(f)
 
         self.metrics = {
-            # "MAPR": MeanAbsolutePercentageError(), 
-            # "wMAPR": WeightedMeanAbsolutePercentageError(), 
-            # "SMAPE": SymmetricMeanAbsolutePercentageError(), 
-            # "RSE": RelativeSquaredError(),
+            "MAPR": MeanAbsolutePercentageError(), 
+            "wMAPR": WeightedMeanAbsolutePercentageError(), 
+            "SMAPE": SymmetricMeanAbsolutePercentageError(), 
+            "RSE": RelativeSquaredError(),
             "MSE": MeanSquaredError(), 
             "MAE": MeanAbsoluteError(),
             "Pearson": PearsonCorrCoef()

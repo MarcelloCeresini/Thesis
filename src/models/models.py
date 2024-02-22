@@ -14,6 +14,8 @@ from torch.nn import Linear, ReLU
 from torch_geometric.nn import GCNConv
 from torch_scatter import scatter_mean
 
+from scipy.spatial import Delaunay
+from scipy.interpolate import LinearNDInterpolator
 
 from config_pckg.config_file import Config 
 from loss_pckg.losses import MSE_loss
@@ -29,10 +31,7 @@ def get_model_instance(full_conf):
     )
 
 class EncodeProcessDecode_Baseline(nn.Module):
-    '''
-    GCNConv (GraphConv uses skip connection for central node)
-    No use of edge attributes ()
-    '''
+    
     def __init__(self, input_dim, output_dim, model_structure: dict, conf, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         # TODO: improve definition from yaml: https://github.com/kaniblu/pytorch-models
@@ -145,3 +144,76 @@ class EncodeProcessDecode_Baseline(nn.Module):
 
     def loss(self, pred:torch.Tensor, label:torch.Tensor):
         return eval(self.conf["hyperparams"]["loss"])(pred, label)
+
+
+
+class PINN(nn.Module):
+    
+    def __init__(self, net, conf, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # TODO: improve definition from yaml: https://github.com/kaniblu/pytorch-models
+
+        self.net = net
+        self.conf = conf
+        self.input_sampling = "all"
+        self.output_sampling = "all"
+
+    def get_grads(self, output, input, create_graph=True):
+        return torch.autograd.grad(output, input, 
+                                    create_graph=create_graph,
+                                    grad_outputs=torch.ones_like(output),
+                                    # allow_unused=True, # Now we don't use position for output so add this if it throws error
+                                    )[0]
+
+    # def forward(self, data: pyg_data.Data):
+    def forward(self,
+            x: torch.Tensor, 
+            x_mask: torch.Tensor, 
+            edge_index: torch.Tensor, 
+            edge_attr: torch.Tensor,
+            pos: torch.Tensor,
+            batch: torch.Tensor,
+            # triangulation: Delaunay, # TODO: if sampling = "all" precompute triangulation for each sample to ease computation 
+            **kwargs
+        ):
+
+        pos = pos[:,:2]
+
+        if self.input_sampling == "all":
+            pass
+        if self.output_sampling == "all":
+            sampling_points = pos
+
+        output = self.net(x, x_mask, edge_index, edge_attr, pos, batch)
+
+        # TODO: improve this --> maybe better to sample cell and then point inside cell
+        triangulation = Delaunay(pos)
+        interpolator = LinearNDInterpolator(triangulation, output)
+        U = torch.tensor(interpolator(sampling_points))
+
+        # TODO: divide by batch
+        U_pos = self.get_grads(U, pos)
+        U_x, U_y = U_pos[:,0], U_pos[:,1]
+        Uvel_xx = self.get_grads(U_x[:,:2], pos[:,0], create_graph=False)
+        Uvel_yy = self.get_grads(U_y[:,:2], pos[:,1], create_graph=False)
+
+        u, v = U[:,0], U[:,1]
+        u_x, v_x, p_x = U_x[:,0], U_x[:,1], U_x[:,2]
+        u_y, v_y, p_y = U_y[:,0], U_y[:,1], U_y[:,2]
+        u_xx, v_xx = Uvel_xx[:,0], Uvel_xx[:,1]
+        u_yy, v_yy = Uvel_yy[:,0], Uvel_yy[:,1]
+
+        eps_1 = u*u_x + v*u_y + p_x - self.C * (u_xx + u_yy)
+        eps_2 = u*v_x + v*v_y + p_y - self.C * (v_xx + v_yy)
+        eps_3 = u_x + v_y
+
+        return u, (eps_1, eps_2, eps_3)
+
+    def loss(self, pred:torch.Tensor, label:torch.Tensor, residuals: tuple = (0)):
+        # TODO: better to divide them and log them singularly, then sum and optimize
+        loss = self.net.loss(pred, label)
+        
+        for residual in residuals:
+            loss += residual.abs().sum()
+        
+        return loss

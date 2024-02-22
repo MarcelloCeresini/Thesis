@@ -22,7 +22,8 @@ class AeroMetric():
             label_efficiency =  label[key][1].cpu() /label[key][0].cpu()
             pred_efficiency =   pred[key][1].cpu()  /pred[key][0].cpu()
             self.relative_error[key] += torch.abs(
-                (label_efficiency-pred_efficiency)/label_efficiency)
+                (label_efficiency-pred_efficiency)/label_efficiency
+            )
             
     def compute(self):
         return_dict = {key: (val/self.n)[0] for key, val in self.relative_error.items()}

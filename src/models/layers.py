@@ -159,6 +159,8 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
         x_graph_x = x_graph[batch]  if self.add_global_info     else torch.zeros((x.shape[0], 1)).to(device=x.device)
         x_BC_x = x_BC[batch]        if self.add_BC_info         else torch.zeros((x.shape[0], 1)).to(device=x.device)
 
+        x_idx_i = torch.unsqueeze(torch.arange(x.shape[0], device=x.device), 1)
+
         new_node_features = self.propagate(
             edge_index, 
             size=(x.shape[0], x.shape[0]),
@@ -170,17 +172,18 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
             x_BC_x=x_BC_x,
             x_graph_i=x_graph_x,
             x_BC_i=x_BC_x,
-            x_idx_i=torch.unsqueeze(torch.arange(x.shape[0], device=x.device), 1),
+            x_idx_i=x_idx_i,
         )
 
         if self.update_edges:
+            # TODO: add graph and BC also here?
             new_edge_features = self.edge_updater(
                 edge_index,
                 size=(x.shape[0], x.shape[0]),
                 x_i=x,
                 x_j=x,
-                edge_attr=edge_attr, # TODO: add graph and BC also here?
-                )
+                edge_attr=edge_attr, 
+                ) 
         else:
             new_edge_features = edge_attr
         return {"x": new_node_features, "edge_attr": new_edge_features}

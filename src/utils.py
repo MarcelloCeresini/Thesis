@@ -1108,10 +1108,16 @@ class MeshCompleteInfo:
                 pl.camera_position = "xy"
             pl.link_views()
             if run_name is not None:
+                if not os.path.isdir(self.conf.test_htmls_comparisons):
+                    os.mkdir(self.conf.test_htmls_comparisons)
+                if not os.path.isdir(self.conf.test_imgs_comparisons):
+                    os.mkdir(self.conf.test_imgs_comparisons)
+
                 if not os.path.isdir(os.path.join(self.conf.test_htmls_comparisons, run_name)):
                     os.mkdir(os.path.join(self.conf.test_htmls_comparisons, run_name))
                 if not os.path.isdir(os.path.join(self.conf.test_imgs_comparisons, run_name)):
                     os.mkdir(os.path.join(self.conf.test_imgs_comparisons, run_name))
+
                 pl.camera.zoom(1.6)
                 pl.export_html(os.path.join(self.conf.test_htmls_comparisons, run_name, self.name+"_cell.html"))
                 pl.screenshot(

@@ -25,8 +25,8 @@ if __name__ == "__main__":
     # for msg_passing_steps in tqdm([1, 3, 5, 7, 10, 15]):
         # print_w_time(f"Starting training with {msg_passing_steps} message passing steps")
         conf = Config()
-
         full_conf = conf.get_tensorboard_logging_info()
+        torch.cuda.empty_cache()
 
         ###################
         # full_conf["model"]["message_passer"]["repeats_training"] = msg_passing_steps
@@ -55,7 +55,10 @@ if __name__ == "__main__":
         run_name = datetime.now().strftime("%Y%m%d-%H%M%S")
         print_w_time(f"Starting run: {run_name}")
 
-        writer = SummaryWriter(f"./log/{run_name}")
+        if not os.path.isdir(os.path.join(conf.ROOT_DIR, "log")):
+            os.mkdir(os.path.join(conf.ROOT_DIR, "log"))
+
+        writer = SummaryWriter(os.path.join(conf.ROOT_DIR, "log", run_name))
         with open(os.path.join(conf.ROOT_DIR, "log", run_name, "full_conf.pkl"), "wb") as f:
             pickle.dump(full_conf, f)
 
@@ -105,6 +108,8 @@ if __name__ == "__main__":
         model = train(model, train_dataloader, val_dataloader, writer, conf)
 
         print_w_time("SAVING MODEL")
+        if not os.path.isdir(os.path.join(conf.DATA_DIR, "model_runs")):
+            os.mkdir(os.path.join(conf.DATA_DIR, "model_runs"))
         model_save_path = os.path.join(conf.DATA_DIR, "model_runs", f"{run_name}.pt")
         torch.save(model.state_dict(), model_save_path)
         model.eval()

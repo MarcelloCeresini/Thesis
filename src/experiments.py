@@ -12,7 +12,7 @@ from torch_geometric.data import Data
 # import torchinfo
 from torch_geometric.nn import summary
 from torch_geometric.utils.convert import to_networkx
-import networkx, rustworkx, igraph
+import networkx, rustworkx
 from time import time
 
 
@@ -20,7 +20,7 @@ import utils
 from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders
 from utils import convert_mesh_complete_info_obj_to_graph, plot_gt_pred_label_comparison, get_input_to_model
-from models.models import get_model_instance
+from models.models import get_model_instance, PINN
 
 
 def get_training_data(run_name, conf, from_checkpoints:bool):
@@ -53,6 +53,7 @@ def get_last_training(conf, from_checkpoints: bool =False):
 
 if __name__ == "__main__":
     conf = Config()
+    full_conf = conf.get_tensorboard_logging_info()
 
     print("Getting dataloaders")
     train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
@@ -61,28 +62,30 @@ if __name__ == "__main__":
             load_from_disk=True,
         )
     print("done")
-    
-    ####### print results of last training
-    model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
-    model.cpu()
-    print(f"Last training: {run_name}")
 
-    for batch in tqdm(test_dataloader):
-        pred_batch = model(**get_input_to_model(batch))
-        for i in range(len(batch)):
-            with torch.no_grad():
-                data = batch[i]
-                pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
-                plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)
+    ####### print results of last training
+    # model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
+    # model.cpu()
+    # print(f"Last training: {run_name}")
+
+    # for batch in tqdm(test_dataloader):
+    #     pred_batch = model(**get_input_to_model(batch))
+    #     for i in range(len(batch)):
+    #         with torch.no_grad():
+    #             data = batch[i]
+    #             pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
+    #             plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)
 
     ######## try if the model works
-    # full_conf = conf.get_tensorboard_logging_info()
-    # model = get_model_instance(full_conf) # build model
-    # model.to(conf.device)
-    # for batch in train_dataloader:
-    #     break
-    # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
-    # print(model_summary)
+    full_conf = conf.get_tensorboard_logging_info()
+    model = get_model_instance(full_conf) # build model
+    model = PINN(model, conf)
+
+    model.cpu()
+    for batch in train_dataloader:
+        break
+    model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
+    print(model_summary)
 
 
     ########## Convert msh to graph
