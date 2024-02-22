@@ -3,6 +3,7 @@ env*/
 .vscode/
 data
 log
+wandb
 
 
 # Byte-compiled / optimized / DLL files

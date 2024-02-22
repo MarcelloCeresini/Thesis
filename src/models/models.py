@@ -177,19 +177,25 @@ class PINN(nn.Module):
             **kwargs
         ):
 
-        pos = pos[:,:2]
 
+        x = x.clone().detach().requires_grad_()
+        pos = pos.clone().detach().requires_grad_()
+        output = self.net(x, x_mask, edge_index, edge_attr, pos, batch)
+        pos = pos[:,:2]
+        
         if self.input_sampling == "all":
             pass
         if self.output_sampling == "all":
             sampling_points = pos
-
-        output = self.net(x, x_mask, edge_index, edge_attr, pos, batch)
+            sampling_batch = batch
 
         # TODO: improve this --> maybe better to sample cell and then point inside cell
-        triangulation = Delaunay(pos)
-        interpolator = LinearNDInterpolator(triangulation, output)
-        U = torch.tensor(interpolator(sampling_points))
+        # triangulation = Delaunay(pos)
+        # interpolator = LinearNDInterpolator(triangulation, output)
+        # U = torch.tensor(interpolator(sampling_points))
+
+        U = pyg_nn.unpool.knn_interpolate(output, pos, sampling_points, batch, sampling_batch, k=3)
+
 
         # TODO: divide by batch
         U_pos = self.get_grads(U, pos)

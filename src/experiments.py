@@ -84,6 +84,7 @@ if __name__ == "__main__":
     model.cpu()
     for batch in train_dataloader:
         break
+    y = model(**get_input_to_model(batch))
     model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
     print(model_summary)
 
