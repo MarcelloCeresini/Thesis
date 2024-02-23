@@ -1,7 +1,15 @@
-name: EncodeProcessDecode_Baseline
+# name: EncodeProcessDecode_Baseline
+name: EPD_with_sampling
 add_self_loops: False
 update_edges: True
 edges_channels: 8
+
+positional_encoder:
+  type: sequential_model
+  layers: 
+    - {type: layer, name: Linear, out_features: 64}
+    - {type: layer, name: LeakyReLU}
+
 encoder:
   type: sequential_model
   layers: 
@@ -18,7 +26,7 @@ edge_encoder:
 
 message_passer:
   type: repeated_shared_layer
-  repeats_training: 22
+  repeats_training: 1
   name: Simple_MLPConv # [NNConv, GCNConv, MLPConv, Simple_MLPConv_edges]
   out_channels: 32 # also in_channels are the same, to be able to call multiple times
   attention: False

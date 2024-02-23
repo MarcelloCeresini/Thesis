@@ -178,7 +178,7 @@ class Config():
         }
 
         self.graph_edge_attr_list = [
-            "x_dist", "y_dist", "z_dist", "norm"
+            "x_dist", "y_dist", "norm"
         ]
 
         self.flag_directional_BC_velocity = True
