@@ -1,5 +1,6 @@
 # name: EncodeProcessDecode_Baseline
 name: EPD_with_sampling
+PINN: v2
 add_self_loops: False
 update_edges: True
 edges_channels: 8
@@ -26,7 +27,7 @@ edge_encoder:
 
 message_passer:
   type: repeated_shared_layer
-  repeats_training: 1
+  repeats_training: 10
   name: Simple_MLPConv # [NNConv, GCNConv, MLPConv, Simple_MLPConv_edges]
   out_channels: 32 # also in_channels are the same, to be able to call multiple times
   attention: False

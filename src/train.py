@@ -2,6 +2,7 @@ from copy import deepcopy
 import os
 from typing import Literal
 from tqdm import tqdm
+from datetime import datetime
 
 import torch
 import torch.nn.functional as F
@@ -11,6 +12,7 @@ import wandb
 from torch.optim import Adam
 import torch.optim.lr_scheduler as lr_scheduler 
 from torch.masked import masked_tensor
+from pandas import json_normalize
 
 from utils import print_memory_state_gpu, get_input_to_model, get_forces
 from config_pckg.config_file import Config 
@@ -59,14 +61,24 @@ def test(loader: pyg_data.DataLoader, model, conf):
 
     with torch.no_grad():
         total_loss = 0
+        total_loss_dict = {}
         model.eval()
         for batch in loader:
             batch.to(device)
-            input_to_model = get_input_to_model(batch)
-            pred = model(**input_to_model)
-            
+            pred = model(**get_input_to_model(batch))
             labels = clean_labels(batch, model.conf)
             loss = model.loss(pred, labels)
+
+            if isinstance(loss, tuple):
+                loss_dict = loss[1]
+                loss = loss[0]
+                pred = pred[0]
+                for k in loss_dict: 
+                    if k in total_loss_dict.keys():
+                        total_loss_dict[k] += loss_dict[k].item() * batch.num_graphs
+                    else:
+                        total_loss_dict[k] = loss_dict[k].item() * batch.num_graphs
+
             total_loss += loss.item() * batch.num_graphs
             metric_dict = forward_metric_results(pred.cpu(), labels.cpu(), conf, metric_dict)
             
@@ -79,9 +91,16 @@ def test(loader: pyg_data.DataLoader, model, conf):
             batch.cpu()
 
         total_loss /= len(loader.dataset)
+        for k in total_loss_dict: total_loss_dict[k] /= len(loader.dataset)
+
         metric_results = compute_metric_results(metric_dict, conf)
         metric_aero_dict = metric_aero.compute()
-        metric_results.update({"efficiency_MAPE/"+k:v for k,v in metric_aero_dict.items()})
+        
+        # metric_results.update({"efficiency_MAPE/"+k:v for k,v in metric_aero_dict.items()})
+        # metric_aero_dict_flattened = json_normalize(metric_aero_dict, sep="_").to_dict(orient="records")[0]
+        # metric_results.update(metric_aero_dict_flattened)
+        metric_results.update(metric_aero_dict)
+        metric_results.update(total_loss_dict)
 
     return total_loss, metric_results
 
@@ -90,22 +109,27 @@ def train(
         model,
         train_loader, 
         val_loader, 
-        writer: SummaryWriter, 
+        writer: SummaryWriter | bool, 
         conf: Config):
-    run_name = os.path.basename(os.path.normpath(writer.get_logdir()))
+    
+    if isinstance(writer, bool):
+        WANDB_FLAG = True
+        run_name = wandb.run.dir.split(os.sep)[-2]
+    else:
+        run_name = os.path.basename(os.path.normpath(writer.get_logdir()))
+
     if not os.path.isdir(os.path.join(conf.DATA_DIR, "model_checkpoints")):
         os.mkdir(os.path.join(conf.DATA_DIR, "model_checkpoints"))
     os.mkdir(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name))
-    # with wandb.init(**conf.get_logging_info()):
 
-    # TODO: change the name "features_to_keep" to "labels_to_keep"
     
-    # wandb.watch(
-    #     model,
-    #     log=conf.logging["model_log_mode"],
-    #     log_freq=conf.logging["n_batches_freq"],
-    #     log_graph=conf.logging["log_graph"]
-    # )
+    if WANDB_FLAG:
+        wandb.watch(
+            model,
+            log=conf.logging["model_log_mode"],
+            log_freq=conf.logging["n_batches_freq"],
+            log_graph=conf.logging["log_graph"]
+        )
 
     opt = Adam(
         params = model.parameters(),
@@ -132,14 +156,25 @@ def train(
 
     for epoch in tqdm(range(conf.hyper_params["training"]["n_epochs"]), desc="Epoch", position=0):
         total_loss = 0
+        total_loss_dict = {}
         model.train()
         for batch in tqdm(train_loader, leave=False, desc="Batch in epoch", position=1):
-            batch.to(conf.device)
             opt.zero_grad(set_to_none=True)
-            input_to_model = get_input_to_model(batch)
-            pred = model(**input_to_model)
+            
+            batch.to(conf.device)
+            pred = model(**get_input_to_model(batch))
             labels = clean_labels(batch, model.conf)
+
             loss = model.loss(pred, labels)
+
+            if isinstance(loss, tuple):
+                loss_dict = loss[1]
+                loss = loss[0]
+                for k in loss_dict: 
+                    if k in total_loss_dict.keys():
+                        total_loss_dict[k] += loss_dict[k].item() * batch.num_graphs
+                    else:
+                        total_loss_dict[k] = loss_dict[k].item() * batch.num_graphs
 
             loss.backward()
             opt.step()
@@ -148,13 +183,28 @@ def train(
             total_loss += loss.item() * batch.num_graphs
 
         total_loss /= len(train_loader.dataset)
-        writer.add_scalar(f"{conf.hyper_params['loss']}/train", total_loss, epoch)
-        writer.add_scalar("lr", opt.param_groups[0]["lr"], epoch) # learning rate
-        writer.add_scalar("epoch", epoch, epoch) # learning rate
-        writer.add_scalar("num_bad_epochs/lr_scheduler", scheduler.num_bad_epochs, epoch)
-        writer.add_scalar("num_bad_epochs/end_of_training", scheduler_for_training_end.num_bad_epochs, epoch)
-        writer.add_scalar("GPU_occ/allocated", torch.cuda.memory_allocated()/1024**3, epoch)
-        writer.add_scalar("GPU_occ/reserved", torch.cuda.memory_reserved()/1024**3, epoch)
+        for k in total_loss_dict: total_loss_dict[k] /= len(train_loader.dataset)
+
+        if WANDB_FLAG:
+            log_dict = {
+                "train_loss": total_loss,
+                "lr": opt.param_groups[0]["lr"],
+                "epoch": epoch,
+                "num_bad_epochs/lr_scheduler": scheduler.num_bad_epochs,
+                "num_bad_epochs/end_of_training": scheduler_for_training_end.num_bad_epochs,
+            }
+            log_dict.update(total_loss_dict)
+            
+            wandb.log(log_dict, epoch)
+        else:
+            # TODO: add loss_dict to writer
+            writer.add_scalar(f"{conf.hyper_params['loss']}/train", total_loss, epoch)
+            writer.add_scalar("lr", opt.param_groups[0]["lr"], epoch) # learning rate
+            writer.add_scalar("epoch", epoch, epoch) # learning rate
+            writer.add_scalar("num_bad_epochs/lr_scheduler", scheduler.num_bad_epochs, epoch)
+            writer.add_scalar("num_bad_epochs/end_of_training", scheduler_for_training_end.num_bad_epochs, epoch)
+            writer.add_scalar("GPU_occ/allocated", torch.cuda.memory_allocated()/1024**3, epoch)
+            writer.add_scalar("GPU_occ/reserved", torch.cuda.memory_reserved()/1024**3, epoch)
         
         torch.cuda.empty_cache()
         if epoch % conf.hyper_params["val"]["n_epochs_val"] == 0:
@@ -166,8 +216,13 @@ def train(
                 best_epoch = epoch
                 model_save_path = os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{epoch}_ckpt.pt")
                 torch.save(model.state_dict(), model_save_path)
-            writer.add_scalar(f"{conf.hyper_params['loss']}/val", val_loss, epoch)
-            write_metric_results(metric_results, writer, epoch)
+            
+            if WANDB_FLAG:
+                wandb.log({"val_loss": val_loss}, epoch)
+                wandb.log(metric_results)
+            else:
+                writer.add_scalar(f"{conf.hyper_params['loss']}/val", val_loss, epoch)
+                write_metric_results(metric_results, writer, epoch)
         
         if scheduler_for_training_end.num_bad_epochs >= scheduler_for_training_end.patience:
             print(f"Restoring best weights of epoch {best_epoch}")
@@ -180,5 +235,3 @@ def train(
         scheduler_for_training_end.step(metrics=val_loss)
         
     return model
-
-            

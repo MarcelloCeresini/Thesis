@@ -227,13 +227,21 @@ class Config():
                 label_name : deepcopy(metric_obj) for label_name in self.labels_to_keep_for_training
             }
             for metric_name, metric_obj in self.metrics.items()}
-        # TODO: implement global metrics
 
         # TODO: find another way to apply initial mask?
         self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)+self.n_radial_attributes
         self.output_dim = len(self.labels_to_keep_for_training)
 
-    def get_tensorboard_logging_info(self) -> Dict:
+        self.PINN_mode: Literal["continuity_only", "full_laminar"] = "continuity_only"
+        self.flag_BC_PINN: bool = True
+
+        self.logging = {
+            "model_log_mode": "all",
+            "n_batches_freq": 100,
+            "log_graph": True,
+        }
+
+    def get_logging_info(self) -> Dict:
         '''
         Return a Dict with the information for wandb logging and the hyperparameters that are important to log
         '''
@@ -242,7 +250,9 @@ class Config():
             "input_dim": self.input_dim,
             "output_dim": self.output_dim,
             "edge_feature_dim": len(self.graph_edge_attr_list),
-            "label_dim": len(self.labels_to_keep_for_training)
+            "label_dim": len(self.labels_to_keep_for_training),
+            "PINN_mode": self.PINN_mode,
+            "flag_BC_PINN": self.flag_BC_PINN,
         })
 
         return_dict = {

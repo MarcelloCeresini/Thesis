@@ -551,8 +551,7 @@ def get_forces(conf:Config, data:Data, pressure_values):
         "tyre": torch.sum((data.inward_normal_areas[tyre_faces]*
                                 pressure_values[tyre_faces].view(-1,1).repeat(1,2)), dim=0),}
 
-    return_dict["car"] = torch.sum(
-        torch.stack(list(return_dict.values()), dim=0), dim=0)
+    return_dict["car"] = sum(return_dict.values())
     
     return return_dict
 

@@ -1,5 +1,5 @@
 from inspect import getfullargspec
-from typing import Optional
+from typing import Literal, Optional
 import numpy as np
 
 import torch
@@ -14,7 +14,7 @@ import torch_geometric.transforms as T
 from torch.nn import Linear, ReLU
 from torch_geometric.nn import GCNConv
 from torch_scatter import scatter_mean
-from torch.func import functional_call, vmap, jacrev
+from torch.func import functional_call, vmap, jacrev, hessian
 
 from scipy.spatial import Delaunay
 from scipy.interpolate import LinearNDInterpolator
@@ -24,13 +24,21 @@ from loss_pckg.losses import MSE_loss
 from .model_utils import get_obj_from_structure, forward_for_general_layer
 
 
-def get_model_instance(full_conf):
-    return eval(full_conf["model"]["name"])(
-        input_dim = full_conf["hyperparams"]["input_dim"],
-        output_dim = full_conf["hyperparams"]["output_dim"],
-        model_structure = full_conf["model"],
-        conf = full_conf
+def get_model_instance(model_conf, conf: Optional[Config] = None):
+    net = eval(model_conf["model"]["name"])(
+        input_dim = model_conf["hyperparams"]["input_dim"],
+        output_dim = model_conf["hyperparams"]["output_dim"],
+        model_structure = model_conf["model"],
+        conf = model_conf
     )
+
+    if model_conf["model"]["PINN"] == True:
+        return PINN(net=net, conf=model_conf)
+    elif model_conf["model"]["PINN"] == "v2":
+        return PINN_single_forward(net=net, conf=conf)
+    else:
+        return net
+
 
 class EncodeProcessDecode_Baseline(nn.Module):
     
@@ -263,15 +271,16 @@ class EPD_with_sampling(nn.Module):
             X.update({"x_graph": pyg_nn.pool.global_mean_pool(X["x"], batch)}) # Graph encoding is updated even when not used
         
         # x_sampled_on_domain = pyg_nn.unpool.knn_interpolate(X["x"], pos, domain_sampling_points, k=3)
+        tmp = forward_for_general_layer(self.decoder, X)
         
-        if sampling_points is None:
-            # Decode
-            tmp = forward_for_general_layer(self.decoder, X)
-            return tmp["x"]
-        else:
+        if sampling_points is not None:
             sampled_points_encoding = self.positional_encoder(sampling_points) # this doesn't work, id doesn't pass through processor
             U_sampled = forward_for_general_layer(self.decoder, {"x": sampled_points_encoding})
-            return U_sampled["x"]
+            return U_sampled["x"], tmp["x"]
+            # Decode
+        else:
+            return tmp["x"]
+
             
     def loss(self, pred:torch.Tensor, label:torch.Tensor):
         return eval(self.conf["hyperparams"]["loss"])(pred, label)
@@ -286,17 +295,43 @@ class PINN(nn.Module):
 
         self.net = net
         self.conf = conf
-        self.output_sampling = "all"
+        self.domain_sampling = "all"
+        self.Re = 1 # FIXME: add correct reynolds
+        self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
 
-    def get_grads(self, output, input, create_graph=True):
-        return torch.autograd.grad(output, input, 
-                                    create_graph=create_graph,
-                                    grad_outputs=torch.ones_like(output),
-                                    is_grads_batched=True,
-                                    # allow_unused=True, # Now we don't use position for output so add this if it throws error
-                                    )
+    def get_BC_residuals_single_sample(self, x, x_mask, u, v, p, u_x, v_y, p_x, p_y):
+        feat_dict = self.conf.graph_node_feature_dict
+        mask_dict = self.conf.graph_node_feature_mask
 
-    # def forward(self, data: pyg_data.Data):
+        t_x, t_y = x[feat_dict["tangent_versor_x"]], x[feat_dict["tangent_versor_y"]]
+        n_x, n_y = -t_y, +t_x
+
+        residual = torch.zeros(1, device=x.device)
+        c=0
+        for k in mask_dict:
+            if x_mask[k] == True:
+                c+=1
+                match k:
+                    case "v_t":
+                        v_t_pred = (t_x*u + t_y*v)
+                        residual += (v_t_pred - x[feat_dict["v_t"]]).square()
+                    case "v_n": # "inward" is not a problem with walls because v_n should always be 0 --> no matter the direction 
+                        v_n_pred = (n_x*u + n_y*v)
+                        residual += (v_n_pred - x[feat_dict["v_n"]]).square()
+                    case "p":
+                        residual += (p - x[feat_dict["p"]]).square()
+                    case "dv_dn": # pressure-outlet = n_x*U_x + n_y*U_y = n_x*u_x + n_y*v_y
+                        dv_dn_pred = (n_x*u_x + n_y*v_y)
+                        residual += (dv_dn_pred - x[feat_dict["dv_dn"]]).square()
+                        # should be torch.dot(normal, (u_x, v_y)), but pressure-outlet is vertical
+                        # residual += u_x.square()
+                    case "dp_dn": # 
+                        dp_dn_pred = (n_x*p_x + n_y*p_y)
+                        residual += (dp_dn_pred - x[feat_dict["dp_dn"]]).square()
+        return residual.sqrt()/c # FIXME: need to decide a better normalization?
+
+
+    # TODO: now it does 4 forward passes to compute everything, optimize
     def forward(self,
             x: torch.Tensor, 
             x_mask: torch.Tensor, 
@@ -310,18 +345,27 @@ class PINN(nn.Module):
         
         pos = pos[:,:2]
         edge_attr = edge_attr[:, torch.tensor([0,1,3])]
-        supervised_positions = pos
         # boundary_pos = pos
 
-        supervised_output = self.net(x, x_mask, edge_index, edge_attr, pos, batch, sampling_points=None)
+        out_supervised = self.net(x, x_mask, edge_index, edge_attr, pos, batch, sampling_points=None)
         
-        pde_x = torch.autograd.Variable(pos[:,0].view(-1,1), requires_grad=True) # TODO: .to(device)
-        pde_y = torch.autograd.Variable(pos[:,1].view(-1,1), requires_grad=True) # TODO: .to(device)
-
-        sampling_points = torch.autograd.Variable(pos, requires_grad=True)
+        if self.domain_sampling == "all":
+            idxs_isnt_BC = (x_mask[:,-1] == 0)
+            domain_sampling_points = torch.autograd.Variable(pos[idxs_isnt_BC], requires_grad=True)
+        else:
+            raise NotImplementedError("Only 'all' is implemented for now")
+        
+        if self.boundary_sampling == "all":
+            idxs_is_BC = (x_mask[:,-1] == 1)
+            boundary_sampling_points = torch.autograd.Variable(pos[idxs_is_BC], requires_grad=True)
+            x_BC, x_mask_BC = x[idxs_is_BC], x_mask[idxs_is_BC]
+            # TODO: do i need to add as variable also x and x_mask? because they are used to compute residuals
+        else:
+            raise NotImplementedError("Only 'all' is implemented for now")
+        
 
         def compute_output(sampling_points):
-            return functional_call(
+            output = functional_call(
                 self.net,
                 (
                     {k: v.detach() for k, v in self.net.named_parameters()}, 
@@ -329,95 +373,253 @@ class PINN(nn.Module):
                 ),
                 (x, x_mask, edge_index, edge_attr, pos, batch, sampling_points),
             )
+            return output
         
-        ft_compute_grad = jacrev(compute_output)
-        ft_compute_sample_grad = vmap(ft_compute_grad, in_dims=0)
-        ft_per_sample_grads = ft_compute_sample_grad(sampling_points)
+        # TODO: if they are the same as output, maybe this is not needed (but in general yes)
+        output = vmap(compute_output, in_dims=0)(domain_sampling_points) 
+        u, v = output[:,0], output[:,1]
 
-        pass
+        f_jacobian_net = jacrev(compute_output) # TODO: why not jacfwd?
+        f_jacobian_net_per_sample = vmap(f_jacobian_net, in_dims=0)
+        gradients = f_jacobian_net_per_sample(domain_sampling_points)
+
+        u_x, u_y = gradients[:,0,0], gradients[:,0,1]
+        v_x, v_y = gradients[:,1,0], gradients[:,1,1]
+        p_x, p_y = gradients[:,2,0], gradients[:,2,1]
+        
+        residuals = {"continuity": (u_x + v_y)}
+
+        if self.conf["hyperparams"]["PINN_mode"] == "continuity_only":
+            pass
+        elif self.conf["hyperparams"]["PINN_mode"] == "full_laminar":
+            f_hessian_net = jacrev(f_jacobian_net) 
+
+            # f_hessian_net = hessian(compute_output) # TODO: https://pytorch.org/tutorials/intermediate/jacobians_hessians.html
+            f_hessian_net_per_sample = vmap(f_hessian_net, in_dims=0)
+            second_derivatives = f_hessian_net_per_sample(domain_sampling_points) # TODO: is there a more efficient way? I don't need second derivatives wrt to pressure and mixed derivatives
+
+            u_xx, u_yy = second_derivatives[:,0,0,0], second_derivatives[:,0,1,1]
+            v_xx, v_yy = second_derivatives[:,1,0,0], second_derivatives[:,1,1,1]
+
+            residuals = residuals.update({
+                "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re,
+                "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re,
+            })
+        else:
+            raise NotImplementedError(f"{self.conf.pinn_mode} is not implemented yet")
+
+        if self.conf["hyperparams"]["flag_BC_PINN"]:
+            output = vmap(compute_output, in_dims=0)(boundary_sampling_points) 
+            u, v, p = output[:,0], output[:,1], output[:,2]
+
+            # probably could concat with domain and only use one call
+            gradients = f_jacobian_net_per_sample(boundary_sampling_points) 
+
+            u_x, u_y = gradients[:,0,0], gradients[:,0,1]
+            v_x, v_y = gradients[:,1,0], gradients[:,1,1]
+            p_x, p_y = gradients[:,2,0], gradients[:,2,1]
+
+            boundary_residuals = vmap(self.get_BC_residuals_single_sample)(
+                x_BC, x_mask_BC, u, v, p, u_x, v_y, p_x, p_y
+            )
+            residuals.update({"boundary": boundary_residuals})
+        else:
+            return out_supervised, residuals
+
+
+    def loss(self, pred:torch.Tensor, label:torch.Tensor):
+
+        out_supervised, residuals = pred
+        assert isinstance(out_supervised, torch.Tensor)
+        assert isinstance(residuals, dict)
+
+        loss_dict = {}
+        loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
+        loss_dict.update({k: self.loss_weights[k] * v.square().mean() for k,v in residuals.items()})
+        
+        return sum(loss_dict.values()), loss_dict
+
+
+class PINN_single_forward(nn.Module):
+    
+    def __init__(self, net:nn.Module, conf, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # TODO: improve definition from yaml: https://github.com/kaniblu/pytorch-models
+
+        self.net = net
+        self.conf = conf
+
+        domain_sampling_mode: Literal["all_domain", "percentage_of_domain"] = "percentage_of_domain"
+        self.domain_sampling = {"mode": domain_sampling_mode, "percentage": 0.8}
+
+        boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = "percentage_of_boundary"
+        self.boundary_sampling = {"mode": boundary_sampling_mode, "percentage": 0.8}
+
+        self.Re = 1 # FIXME: add correct reynolds
+        self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
+
+    def get_BC_residuals_single_sample(self, x, x_mask, u, v, p, u_x, v_y, p_x, p_y):
+        feat_dict = self.conf.graph_node_feature_dict
+        mask_dict = self.conf.graph_node_feature_mask
+
+        t_x, t_y = x[feat_dict["tangent_versor_x"]], x[feat_dict["tangent_versor_y"]]
+        n_x, n_y = -t_y, +t_x
+
+        residual = torch.zeros_like(p_x, device=p_x.device)
+        c = torch.zeros_like(p_x, device=p_x.device)
+        for k in mask_dict:
+            match k:
+                case "v_t":
+                    v_t_pred = (t_x*u + t_y*v)
+                    residual += (v_t_pred - x[feat_dict["v_t"]]).square()       * x_mask[mask_dict[k]]
+                    c += x_mask[mask_dict[k]]
+                case "v_n": # "inward" is not a problem with walls because v_n should always be 0 --> no matter the direction 
+                    v_n_pred = (n_x*u + n_y*v)
+                    residual += (v_n_pred - x[feat_dict["v_n"]]).square()       * x_mask[mask_dict[k]]
+                    c += x_mask[mask_dict[k]]
+                case "p":
+                    residual += (p - x[feat_dict["p"]]).square()                * x_mask[mask_dict[k]]
+                    c += x_mask[mask_dict[k]]
+                case "dv_dn": # pressure-outlet = n_x*U_x + n_y*U_y = n_x*u_x + n_y*v_y
+                    dv_dn_pred = (n_x*u_x + n_y*v_y)
+                    residual += (dv_dn_pred - x[feat_dict["dv_dn"]]).square()   * x_mask[mask_dict[k]]
+                    c += x_mask[mask_dict[k]]
+                    # should be torch.dot(normal, (u_x, v_y)), but pressure-outlet is vertical
+                    # residual += u_x.square()
+                case "dp_dn": # 
+                    dp_dn_pred = (n_x*p_x + n_y*p_y)
+                    residual += (dp_dn_pred - x[feat_dict["dp_dn"]]).square()   * x_mask[mask_dict[k]]
+                    c += x_mask[mask_dict[k]]
+        
+        return residual.sqrt()/c # FIXME: need to decide a better normalization?
+
+
+    # TODO: now it does 4 forward passes to compute everything, optimize
+    def forward(self,
+            x: torch.Tensor, 
+            x_mask: torch.Tensor, 
+            edge_index: torch.Tensor, 
+            edge_attr: torch.Tensor,
+            pos: torch.Tensor,
+            batch: torch.Tensor,
+            # triangulation: Delaunay, # TODO: if sampling = "all" precompute triangulation for each sample to ease computation 
+            **kwargs
+        ):
+        
+        pos = pos[:,:2]
+        edge_attr = edge_attr[:, torch.tensor([0,1,3])]
+        # boundary_pos = pos
+
+        idxs_isnt_BC = (x_mask[:,-1] == 0)
+        if self.domain_sampling["mode"] == "all_domain":
+            idxs_domain_sampled = idxs_isnt_BC
+        elif self.domain_sampling["mode"] == "percentage_of_domain":
+            num_samples = int(self.domain_sampling["percentage"] * idxs_isnt_BC.count_nonzero())
+            idxs_domain_sampled = torch.multinomial(idxs_isnt_BC.to(torch.float), num_samples, replacement=False) # as np.random.choice
+        else:
+            raise NotImplementedError()
+        
+        domain_sampling_points = torch.autograd.Variable(pos[idxs_domain_sampled], requires_grad=True)
+        
+        idxs_is_BC = (x_mask[:,-1] == 1)
+        if self.boundary_sampling["mode"] == "all_boundary":
+            idxs_boundary_sampled = idxs_is_BC
+        elif self.boundary_sampling["mode"] == "percentage_of_boundary":
+            num_samples = int(self.boundary_sampling["percentage"] * idxs_is_BC.count_nonzero())
+            idxs_boundary_sampled = torch.multinomial(idxs_is_BC.to(torch.float), num_samples, replacement=False) # as np.random.choice
+        else:
+            raise NotImplementedError("Only 'all' is implemented for now")
+        
+        # TODO: do i need to add as variable also x and x_mask? because they are used to compute residuals
+        x_BC, x_mask_BC = x[idxs_boundary_sampled], x_mask[idxs_boundary_sampled]
+        boundary_sampling_points = torch.autograd.Variable(pos[idxs_boundary_sampled], requires_grad=True)
+        
+        # FIXME: add net_params as input to compute output to have the derivative wrt them!
+        def compute_output(sampling_points):
+            out_samp, out_sup = functional_call(
+                self.net,
+                (
+                    {k: v.detach() for k, v in self.net.named_parameters()}, 
+                    {k: v.detach() for k, v in self.net.named_buffers()}
+                ),
+                (x, x_mask, edge_index, edge_attr, pos, batch, sampling_points),
+            )
+            return out_samp, (out_samp, out_sup)
         
 
+        def compute_first_derivative(sampling_points):
+            grads_samp, (out_samp, out_sup) = \
+                jacrev(compute_output, has_aux=True)(sampling_points)
+            return grads_samp, (grads_samp, out_samp, out_sup)
         
 
-        # OSS THIS WAS MY BEST IDEA BUT u LOSES GRAD inside autograd when batched with vmap
-        u = sampled_output[:,0].view(-1,1)
-        du_dx = torch.vmap(lambda u, x: (torch.autograd.grad(
-            u, x, grad_outputs=torch.ones_like(u, requires_grad=True), create_graph=True
-        )))(u, pde_x) 
-        v = sampled_output[:,1].view(-1,1)
-        p = sampled_output[:,2].view(-1,1)
-
-        # torch.func.grad()
-
-        # u_x = torch.vmap(lambda output, input: torch.autograd.grad(output, input, 
-        #                             grad_outputs=torch.ones_like(output), create_graph=True))(u, pde_x)
-
-        # grads_x  = torch.autograd.grad(U_sampled_on_domain[:,0], pde_x, grad_outputs=torch.ones_like(U_sampled_on_domain), 
-        #                                     retain_graph=True, create_graph=True)
+        def compute_second_derivative(sampling_points):
+            hess_samp, (grads_samp, out_samp, out_sup) = \
+                jacrev(compute_first_derivative, has_aux=True)(sampling_points)
+            return hess_samp, grads_samp, out_samp, out_sup
         
-        pass
-        # for pos_in in pos: pos_in.requires_grad_().retain_grad()
-        # pos = torch.concatenate([pos_in.view(1,-1) for pos_in in pos], dim=0)
-        # pos.requires_grad_().retain_grad()
+        # FIXME: no gradients for out_sup --> probably need to give to vmap also the other inputs
+        # (x, x_mask, edge_index, edge_attr, pos, batch, sampling_points)
+        # with None as map --> so the gradient can flow
+        hess_samp, grads_samp, out_samp, out_sup = vmap(compute_second_derivative, out_dims=(0,0,0,None))(
+            torch.concatenate((domain_sampling_points, boundary_sampling_points))
+        )
+
+        domain_slice = torch.arange(domain_sampling_points.shape[0])
+        boundary_slice = torch.arange(start=domain_sampling_points.shape[0], 
+                                        end=domain_sampling_points.shape[0]+boundary_sampling_points.shape[0])
+
+        def get_correct_slice(slice_idxs, hess_samp, grads_samp, out_samp):
+            u, v, p = out_samp[slice_idxs,0], out_samp[slice_idxs,1], out_samp[slice_idxs,2]
+            u_x, u_y = grads_samp[slice_idxs,0,0], grads_samp[slice_idxs,0,1]
+            v_x, v_y = grads_samp[slice_idxs,1,0], grads_samp[slice_idxs,1,1]
+            p_x, p_y = grads_samp[slice_idxs,2,0], grads_samp[slice_idxs,2,1]
+            u_xx, u_yy = hess_samp[slice_idxs,0,0,0], hess_samp[slice_idxs,0,1,1]
+            v_xx, v_yy = hess_samp[slice_idxs,1,0,0], hess_samp[slice_idxs,1,1,1]
+
+            return u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy
+
+        def get_domain_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
+            u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
+                slice_idxs, hess_samp, grads_samp, out_samp)
+            residuals = {}
+            match self.conf.PINN_mode:
+                case "continuity_only":
+                    residuals.update({"continuity": (u_x + v_y)})
+                case "full_laminar":
+                    residuals.update({"continuity": (u_x + v_y),
+                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re,
+                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re,})
+                case _:
+                    raise NotImplementedError(f"{self.conf.pinn_mode} is not implemented yet")
+            
+            return residuals
         
-        # edge_attr = pos[edge_index[1,:], :] - pos[edge_index[0,:], :]
-        # edge_attr = torch.concatenate((edge_attr, torch.norm(edge_attr, p=2, dim=1).view(-1,1)), dim=1)
+        def get_boundary_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
+            u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
+                slice_idxs, hess_samp, grads_samp, out_samp)
+            if self.conf.flag_BC_PINN:
+                return {"boundary": vmap(self.get_BC_residuals_single_sample)(
+                    x_BC, x_mask_BC, u, v, p, u_x, v_y, p_x, p_y
+                )}
+            else:
+                return {}
 
-        # TODO: improve this --> maybe better to sample cell and then point inside cell
-        # triangulation = Delaunay(pos)
-        # interpolator = LinearNDInterpolator(triangulation, output)
-        # U = torch.tensor(interpolator(sampling_points))
+        residuals = {}
+        residuals.update(get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp))
+        residuals.update(get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp))
 
-        # U = self.sample_output(output, pos.clone().detach())
-        out = output[0]
-
-        for out, pos_in in zip(output, pos):
-            U = torch.autograd.grad(out, pos_in, grad_outputs=torch.ones((out.shape[0], out.shape[0])), is_grads_batched=True)
-        pass
-
-        # U = output.clone()
-
-        # TODO: divide by batch
-        # torch.vmap()
-        # need autograd only from pos to its own output! instead like this it
-        # gets, for each input position, the derivative of each output (both u,v and p and also all output points)
-        # and then also SUMS all of them (so you have at the end a "sum of grads" for each input)
-
-        # need to vmap grad((u,v,p), (x,y)) for each pair!!!
-
-        # U_pos = torch.autograd.functional.jacobian(
-        #     lambda TMP: self.net(x, x_mask, edge_index, edge_attr, TMP, batch),
-        #     pos,
-        #     create_graph=True,
-        #     # vectorize=True,
-        #     )
-
-        U_pos = self.get_grads(U[0].clone(), pos[0])
-        U_x, U_y = U_pos[:,0], U_pos[:,1]
-        Uvel_xx = self.get_grads(U_x[:,:2], pos[:,0], create_graph=False)
-        Uvel_yy = self.get_grads(U_y[:,:2], pos[:,1], create_graph=False)
-
-        u, v = U[:,0], U[:,1]
-        u_x, v_x, p_x = U_x[:,0], U_x[:,1], U_x[:,2]
-        u_y, v_y, p_y = U_y[:,0], U_y[:,1], U_y[:,2]
-        u_xx, v_xx = Uvel_xx[:,0], Uvel_xx[:,1]
-        u_yy, v_yy = Uvel_yy[:,0], Uvel_yy[:,1]
-
-        eps_1 = u*u_x + v*u_y + p_x - self.C * (u_xx + u_yy)
-        eps_2 = u*v_x + v*v_y + p_y - self.C * (v_xx + v_yy)
-        eps_3 = u_x + v_y
-
-        residuals = (eps_1, eps_2, eps_3)
-
-        return output_supervised, residuals    
-        return output_supervised, output_boundaries, residuals
+        return out_sup, residuals
 
 
-    def loss(self, pred:torch.Tensor, label:torch.Tensor, residuals: tuple = (0)):
-        # TODO: better to divide them and log them singularly, then sum and optimize
-        loss = self.net.loss(pred, label)
+    def loss(self, pred:torch.Tensor, label:torch.Tensor):
+
+        out_supervised, residuals = pred
+        assert isinstance(out_supervised, torch.Tensor)
+        assert isinstance(residuals, dict)
+
+        loss_dict = {}
+        loss_dict.update({"supervised": self.net.loss(out_supervised, label)}) # FIXME: no gradients here
+        loss_dict.update({k: v.square().mean() for k,v in residuals.items()})
         
-        for residual in residuals:
-            loss += residual.abs().sum()
-        
-        return loss
+        return sum(loss_dict.values()), loss_dict
