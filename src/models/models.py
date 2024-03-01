@@ -299,7 +299,7 @@ class PINN(nn.Module):
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = "percentage_of_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, "percentage": 0.8}
 
-        self.Re = 1 # FIXME: add correct reynolds
+        self.Re = 1/(1.45e-5) # V_char=1, L_char=1
         self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
 
 
