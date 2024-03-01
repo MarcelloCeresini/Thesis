@@ -235,6 +235,10 @@ class Config():
         self.PINN_mode: Literal["continuity_only", "full_laminar"] = "continuity_only"
         self.flag_BC_PINN: bool = True
 
+        self.dynamic_loss_weights = True
+        self.main_loss_component_dynamic = "supervised"
+        self.lambda_dynamic_weights = 0.1 # NSFnets arXiv:2003.06496v1
+
         self.logging = {
             "model_log_mode": "all",
             "n_batches_freq": 100,
@@ -253,6 +257,9 @@ class Config():
             "label_dim": len(self.labels_to_keep_for_training),
             "PINN_mode": self.PINN_mode,
             "flag_BC_PINN": self.flag_BC_PINN,
+            "feat_dict": self.graph_node_feature_dict,
+            "mask_dict": self.graph_node_feature_mask,
+
         })
 
         return_dict = {

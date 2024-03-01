@@ -19,9 +19,9 @@ class AeroMetric():
         self.n += 1
 
         for key in self.components: 
-            self.relative_error["drag"][key] = torch.abs((label[key][0]-pred[key][0])/label[key][0])
+            self.relative_error["drag"][key] += torch.abs((label[key][0].cpu()-pred[key][0].cpu())/label[key][0].cpu())
         for key in self.components: 
-            self.relative_error["lift"][key] = torch.abs((label[key][1]-pred[key][1])/label[key][1])
+            self.relative_error["lift"][key] += torch.abs((label[key][1].cpu()-pred[key][1].cpu())/label[key][1].cpu())
         
         for key in self.components:
             label_efficiency =  label[key][1].cpu() /label[key][0].cpu()

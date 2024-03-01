@@ -21,7 +21,7 @@ import utils
 from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders
 from utils import convert_mesh_complete_info_obj_to_graph, plot_gt_pred_label_comparison, get_input_to_model
-from models.models import get_model_instance, PINN, PINN_single_forward
+from models.models import get_model_instance, PINN
 
 
 def get_training_data(run_name, conf, from_checkpoints:bool):
@@ -79,9 +79,9 @@ if __name__ == "__main__":
 
     ######## try if the model works
     model_conf = conf.get_logging_info()
-    model = get_model_instance(model_conf, conf) # build model
+    model = get_model_instance(model_conf) # build model
 
-    model.cpu()
+    model.to(conf.device)
 
     opt = Adam(
         params = model.parameters(),
@@ -91,10 +91,12 @@ if __name__ == "__main__":
     opt.zero_grad(set_to_none=True)
 
     for batch in train_dataloader:
+        batch.to(conf.device)
         break
     y = model(**get_input_to_model(batch))
     loss = model.loss(y, batch.y)
     loss[0].backward()
+    opt.step()
     model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
     print(model_summary)
 

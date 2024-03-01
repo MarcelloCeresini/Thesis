@@ -4,7 +4,7 @@ from typing import Optional
 import torch.nn as nn
 import torch_geometric.nn as pyg_nn
 
-from torch.nn import Linear, ReLU, Sequential, LeakyReLU
+from torch.nn import Linear, ReLU, Sequential, LeakyReLU, Softplus
 from torch_geometric.nn import GCNConv, NNConv
 from math import ceil
 
@@ -36,6 +36,9 @@ def get_obj_from_structure(
                     return in_channels, obj
                 case "LeakyReLU":
                     obj = LeakyReLU()
+                    return in_channels, obj
+                case "Softplus":
+                    obj = Softplus()
                     return in_channels, obj
                 case _:
                     raise NotImplementedError()
@@ -99,6 +102,7 @@ def get_obj_from_structure(
                         add_global_info=str_d["add_global_info"],
                         add_BC_info=str_d["add_BC_info"],
                         mlp=mlp,
+                        standard_activation=str_d["standard_activation"],
                         aggr=str_d["aggr"],
                     )
                     return out_channels, obj
@@ -130,7 +134,7 @@ def get_obj_from_structure(
                                 str_d=str_d["nn"],
                                 conf=conf,
                                 out_channels=out_channels_mlp,)
-                    
+
                     in_channels_mlp_update += out_channels_mlp
 
                     _, mlp_update = get_obj_from_structure(
@@ -159,6 +163,7 @@ def get_obj_from_structure(
                         k_heads=str_d["k_heads"],
                         channels_per_head=str_d["channels_per_head"],
                         edge_in_channels=edge_channels,
+                        standard_activation=str_d["standard_activation"],
                         aggr=str_d["aggr"],
                     )
                     return out_channels, obj

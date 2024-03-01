@@ -143,6 +143,7 @@ if __name__ == "__main__":
             print(f"Test metrics: {metric_results}")
 
             if WANDB_FLAG:
+                metric_results = {f"test_{k}":v for k,v in metric_results.items()}
                 metric_results.update({"test_loss":test_loss})
                 wandb.log(metric_results)
             else:

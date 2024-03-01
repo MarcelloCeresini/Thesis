@@ -4,6 +4,7 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules import Module
+from torch.nn import Linear, ReLU, Sequential, LeakyReLU, Softplus
 
 import torch_geometric.nn as pyg_nn
 import torch_geometric.data as pyg_data
@@ -23,6 +24,7 @@ class MLPConv(pyg_nn.MessagePassing):
         add_global_info: bool,
         add_BC_info: bool,
         skip: bool = True,
+        standard_activation = nn.Softplus(),
         aggr: str | List[str] | Aggregation | None = "mean", 
             *, aggr_kwargs: Dict[str, Any] | None = None, 
             flow: str = "source_to_target", node_dim: int = -2, decomposed_layers: int = 1, **kwargs):
@@ -38,6 +40,7 @@ class MLPConv(pyg_nn.MessagePassing):
         self.skip = skip
         self.add_global_info = add_global_info
         self.add_BC_info = add_BC_info
+        self.standard_activation = standard_activation
         
         self.m_node_1 = nn.Linear(  in_features=self.in_channels,
                                     out_features=self.mid_channels,)
@@ -45,12 +48,12 @@ class MLPConv(pyg_nn.MessagePassing):
                                     out_features=self.mid_channels,)
         self.m_edge = nn.Linear(    in_features=self.edge_channels,
                                     out_features=self.mid_channels,)
-        self.act_1 = nn.LeakyReLU()
+        self.act_1 = self.standard_activation
         self.self_node_contrib = nn.Linear( in_features=self.in_channels,
                                             out_features=self.out_channels,)
         self.message_contrib = nn.Linear(   in_features=self.mid_channels,
                                             out_features=self.out_channels,)
-        self.act_2 = nn.LeakyReLU()
+        self.act_2 = self.standard_activation
 
 
     def forward(self, 
@@ -112,6 +115,7 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
         k_heads: Optional[int] = 1,
         channels_per_head: Optional[int] = 1,
         edge_in_channels: Optional[int] = None,
+        standard_activation: str = "Softplus",
         aggr: str | List[str] | Aggregation | None = "mean", 
             *, aggr_kwargs: Dict[str, Any] | None = None, 
             flow: str = "source_to_target", node_dim: int = -2, decomposed_layers: int = 1, **kwargs):
@@ -129,10 +133,11 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
         self.skip = skip
         self.k_heads = k_heads
         self.edge_in_channels = edge_in_channels
+        self.standard_activation = eval(standard_activation)()
 
-        self.act_msg = nn.LeakyReLU()
-        self.act_update = nn.LeakyReLU()
-        self.act_edge_update = nn.LeakyReLU()
+        self.act_msg = self.standard_activation
+        self.act_update = self.standard_activation
+        self.act_edge_update = self.standard_activation
 
         if self.attention:
             self.k_heads = k_heads
@@ -143,7 +148,7 @@ class Simple_MLPConv(pyg_nn.MessagePassing):
             self.edge_layer = nn.Linear(in_features=self.edge_in_channels, out_features=self.k_heads, bias=False)
             # self.mlp_attention = nn.Sequential(
             #     nn.Linear(in_features=2*self.in_channels, out_features=self.att_channels, bias=False),
-            #     nn.LeakyReLU(),
+            #     self.standard_activation,
             #     nn.Linear(in_features=self.att_channels, out_features=self.k_heads, bias=False),)
 
 

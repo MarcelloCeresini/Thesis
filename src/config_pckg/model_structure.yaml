@@ -1,6 +1,6 @@
 # name: EncodeProcessDecode_Baseline
 name: EPD_with_sampling
-PINN: v2
+PINN: True
 add_self_loops: False
 update_edges: True
 edges_channels: 8
@@ -8,22 +8,24 @@ edges_channels: 8
 positional_encoder:
   type: sequential_model
   layers: 
+    - {type: layer, name: Linear, out_features: 32}
+    - {type: layer, name: Softplus}
     - {type: layer, name: Linear, out_features: 64}
-    - {type: layer, name: LeakyReLU}
+    - {type: layer, name: Softplus}
 
 encoder:
   type: sequential_model
   layers: 
     # PUT A HIGHER NUMBER HERE --> at least 32 because it enters with ~160 channels
     - {type: layer, name: Linear, out_features: 64}
-    - {type: layer, name: LeakyReLU}
+    - {type: layer, name: Softplus}
     # Last layer to get out_channels = message_passer["out_channels"] is automatic
 
 edge_encoder:
   type: sequential_model
   layers: 
     - {type: layer, name: Linear, out_features: 8} 
-    - {type: layer, name: LeakyReLU}
+    - {type: layer, name: Softplus}
 
 message_passer:
   type: repeated_shared_layer
@@ -38,28 +40,31 @@ message_passer:
   add_global_info: True
   add_BC_info: True
   skip: True
+  standard_activation: Softplus
   aggr: mean
   nn: # takes as input edge_features (and does NOT update them, always gets edge features)
     type: sequential_model
     layers: 
       - {type: layer, name: Linear, out_features: 32}
-      - {type: layer, name: LeakyReLU}
+      - {type: layer, name: Softplus}
       # Last (Linear) layer for internal_mlp is always added autonomously
   nn_update:
     type: sequential_model
     layers: 
       - {type: layer, name: Linear, out_features: 32}
-      - {type: layer, name: LeakyReLU}
+      - {type: layer, name: Softplus}
   nn_edges:
     type: sequential_model
     layers: 
       - {type: layer, name: Linear, out_features: 8}
-      - {type: layer, name: LeakyReLU}
+      - {type: layer, name: Softplus}
 
 decoder:
   type: sequential_model
   layers: 
-    - {type: layer, name: Linear, out_features: 16}
-    - {type: layer, name: LeakyReLU}
+    - {type: layer, name: Linear, out_features: 128}
+    - {type: layer, name: Softplus}
+    - {type: layer, name: Linear, out_features: 32}
+    - {type: layer, name: Softplus}
     # Last (Linear) layer for regression is always added by model autonomously
 

@@ -1,6 +1,6 @@
 from copy import deepcopy
 import os
-from typing import Literal
+from typing import Literal, Optional
 from tqdm import tqdm
 from datetime import datetime
 
@@ -53,7 +53,7 @@ def write_metric_results(metric_results, writer, epoch, split="val") -> None:
             writer.add_scalar(metric_name, metric_res_subdict, epoch)
 
 
-def test(loader: pyg_data.DataLoader, model, conf):
+def test(loader: pyg_data.DataLoader, model, conf, loss_weights: Optional[dict]):
     metric_dict = deepcopy(conf.metric_dict)
     metric_aero = conf.metric_aero
 
@@ -62,6 +62,7 @@ def test(loader: pyg_data.DataLoader, model, conf):
     with torch.no_grad():
         total_loss = 0
         total_loss_dict = {}
+        total_loss_dict_reweighted = {}
         model.eval()
         for batch in loader:
             batch.to(device)
@@ -74,10 +75,10 @@ def test(loader: pyg_data.DataLoader, model, conf):
                 loss = loss[0]
                 pred = pred[0]
                 for k in loss_dict: 
-                    if k in total_loss_dict.keys():
-                        total_loss_dict[k] += loss_dict[k].item() * batch.num_graphs
-                    else:
-                        total_loss_dict[k] = loss_dict[k].item() * batch.num_graphs
+                    total_loss_dict[k] = total_loss_dict.get(k, 0) + \
+                                            loss_dict[k].item()*batch.num_graphs
+                if conf.dynamic_loss_weights:
+                    loss = sum(loss_dict[k]*loss_weights.get(k,1) for k in loss_dict)
 
             total_loss += loss.item() * batch.num_graphs
             metric_dict = forward_metric_results(pred.cpu(), labels.cpu(), conf, metric_dict)
@@ -92,7 +93,9 @@ def test(loader: pyg_data.DataLoader, model, conf):
 
         total_loss /= len(loader.dataset)
         for k in total_loss_dict: total_loss_dict[k] /= len(loader.dataset)
-
+        for k in total_loss_dict: 
+            total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights.get(k,1)
+        
         metric_results = compute_metric_results(metric_dict, conf)
         metric_aero_dict = metric_aero.compute()
         
@@ -101,6 +104,7 @@ def test(loader: pyg_data.DataLoader, model, conf):
         # metric_results.update(metric_aero_dict_flattened)
         metric_results.update(metric_aero_dict)
         metric_results.update(total_loss_dict)
+        metric_results.update(total_loss_dict_reweighted)
 
     return total_loss, metric_results
 
@@ -154,9 +158,14 @@ def train(
 
     print_memory_state_gpu("Before training", conf)
 
+    loss_weights = {}
+    mean_grads = {}
+
     for epoch in tqdm(range(conf.hyper_params["training"]["n_epochs"]), desc="Epoch", position=0):
         total_loss = 0
         total_loss_dict = {}
+        total_loss_dict_reweighted = {}
+
         model.train()
         for batch in tqdm(train_loader, leave=False, desc="Batch in epoch", position=1):
             opt.zero_grad(set_to_none=True)
@@ -170,12 +179,26 @@ def train(
             if isinstance(loss, tuple):
                 loss_dict = loss[1]
                 loss = loss[0]
+                
                 for k in loss_dict: 
-                    if k in total_loss_dict.keys():
-                        total_loss_dict[k] += loss_dict[k].item() * batch.num_graphs
-                    else:
-                        total_loss_dict[k] = loss_dict[k].item() * batch.num_graphs
+                    total_loss_dict[k] = total_loss_dict.get(k, 0) + \
+                                            loss_dict[k].item()*batch.num_graphs # set it with initialization = 0
 
+                # TODO: do it each BATCH? or each EPOCH? in any case, log each EPOCH?
+                if conf.dynamic_loss_weights:
+                    assert conf.main_loss_component_dynamic in loss_dict, f"{conf.main_loss_component_dynamic} not in loss_dict keys: {list(loss_dict.keys())}"
+                    for k in loss_dict:
+                        loss_dict[k].backward(retain_graph=True)
+                        # for param in model.named_parameters():
+                        #     print(f"True - {param[0]}" if isinstance(param[1].grad, torch.Tensor) else f"False - {param[0]}")
+                        mean_grads[k] = mean_grads.get(k, 0) + \
+                                            torch.cat([param.grad.view(-1) for param in model.parameters() 
+                                                if isinstance(param.grad, torch.Tensor)]).abs().mean()
+                        opt.zero_grad()
+                    # TODO: could store grads and compute differences between them to avoid the last
+                    # backward pass with the total loss (because we are summing them)
+                    loss = sum(loss_dict[k]*loss_weights.get(k,1) for k in loss_dict)
+                    
             loss.backward()
             opt.step()
             batch.cpu()
@@ -194,7 +217,7 @@ def train(
                 "num_bad_epochs/end_of_training": scheduler_for_training_end.num_bad_epochs,
             }
             log_dict.update(total_loss_dict)
-            
+
             wandb.log(log_dict, epoch)
         else:
             # TODO: add loss_dict to writer
@@ -206,10 +229,10 @@ def train(
             writer.add_scalar("GPU_occ/allocated", torch.cuda.memory_allocated()/1024**3, epoch)
             writer.add_scalar("GPU_occ/reserved", torch.cuda.memory_reserved()/1024**3, epoch)
         
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         if epoch % conf.hyper_params["val"]["n_epochs_val"] == 0:
-            val_loss, metric_results = test(val_loader, model, conf)
-            torch.cuda.empty_cache()
+            val_loss, metric_results = test(val_loader, model, conf, loss_weights)
+            # torch.cuda.empty_cache()
 
             if val_loss < best_loss:
                 best_loss = val_loss
@@ -219,11 +242,20 @@ def train(
             
             if WANDB_FLAG:
                 wandb.log({"val_loss": val_loss}, epoch)
-                wandb.log(metric_results)
+                wandb.log({f"val_{k}":v for k,v in metric_results.items()}, epoch)
             else:
                 writer.add_scalar(f"{conf.hyper_params['loss']}/val", val_loss, epoch)
                 write_metric_results(metric_results, writer, epoch)
         
+        if conf.dynamic_loss_weights: 
+            for k in total_loss_dict: 
+                total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights.get(k,1)
+            wandb.log({f"weight_{k}":v for k,v in loss_weights.items()}, epoch)
+            wandb.log({f"reweighted_{k}":v for k,v in total_loss_dict_reweighted.items()}, epoch)
+            for k in loss_dict:
+                loss_weights[k] = (1-conf.lambda_dynamic_weights) * loss_weights.get(k, 1) + \
+                                    conf.lambda_dynamic_weights * (mean_grads[conf.main_loss_component_dynamic]/mean_grads[k])
+
         if scheduler_for_training_end.num_bad_epochs >= scheduler_for_training_end.patience:
             print(f"Restoring best weights of epoch {best_epoch}")
             model.load_state_dict(
@@ -231,7 +263,10 @@ def train(
             )
             break
 
-        scheduler.step(metrics=val_loss)
-        scheduler_for_training_end.step(metrics=val_loss)
+        # scheduler.step(metrics=val_loss)
+        # scheduler_for_training_end.step(metrics=val_loss)
+        raise NotImplementedError("debug this")
+        scheduler.step(metrics=sum(metric_results["MAE"]))
+        scheduler_for_training_end.step(metrics=sum(metric_results["MAE"]))
         
     return model
