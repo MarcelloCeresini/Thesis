@@ -316,27 +316,27 @@ class PINN(nn.Module):
             match k:
                 case "v_t":
                     v_t_pred = (t_x*u + t_y*v)
-                    residual += (v_t_pred - x[feat_dict["v_t"]]).square()       * x_mask[mask_dict[k]]
+                    residual += (v_t_pred - x[feat_dict["v_t"]]).abs()       * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                 case "v_n": # "inward" is not a problem with walls because v_n should always be 0 --> no matter the direction 
                     v_n_pred = (n_x*u + n_y*v)
-                    residual += (v_n_pred - x[feat_dict["v_n"]]).square()       * x_mask[mask_dict[k]]
+                    residual += (v_n_pred - x[feat_dict["v_n"]]).abs()       * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                 case "p":
-                    residual += (p - x[feat_dict["p"]]).square()                * x_mask[mask_dict[k]]
+                    residual += (p - x[feat_dict["p"]]).abs()                * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                 case "dv_dn": # pressure-outlet = n_x*U_x + n_y*U_y = n_x*u_x + n_y*v_y
                     dv_dn_pred = (n_x*u_x + n_y*v_y)
-                    residual += (dv_dn_pred - x[feat_dict["dv_dn"]]).square()   * x_mask[mask_dict[k]]
+                    residual += (dv_dn_pred - x[feat_dict["dv_dn"]]).abs()   * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                     # should be torch.dot(normal, (u_x, v_y)), but pressure-outlet is vertical
                     # residual += u_x.square()
                 case "dp_dn": # 
                     dp_dn_pred = (n_x*p_x + n_y*p_y)
-                    residual += (dp_dn_pred - x[feat_dict["dp_dn"]]).square()   * x_mask[mask_dict[k]]
+                    residual += (dp_dn_pred - x[feat_dict["dp_dn"]]).abs()   * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
         
-        return residual.sqrt()/c # FIXME: need to decide a better normalization?
+        return residual / c
 
 
     def forward(self,
@@ -461,6 +461,6 @@ class PINN(nn.Module):
 
         loss_dict = {}
         loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
-        loss_dict.update({k: v.square().mean() for k,v in residuals.items()})
+        loss_dict.update({k: v.abs().mean() for k,v in residuals.items()})
         
         return sum(loss_dict.values()), loss_dict

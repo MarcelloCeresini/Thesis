@@ -7,25 +7,25 @@ edges_channels: 8
 
 positional_encoder:
   type: sequential_model
-  layers: 
-    - {type: layer, name: Linear, out_features: 32}
-    - {type: layer, name: Softplus}
-    - {type: layer, name: Linear, out_features: 64}
-    - {type: layer, name: Softplus}
+  # layers: 
+    # - {type: layer, name: Linear, out_features: 32}
+    # - {type: layer, name: Softplus}
+    # - {type: layer, name: Linear, out_features: 64}
+    # - {type: layer, name: Softplus}
 
 encoder:
   type: sequential_model
-  layers: 
+  # layers: 
     # PUT A HIGHER NUMBER HERE --> at least 32 because it enters with ~160 channels
-    - {type: layer, name: Linear, out_features: 64}
-    - {type: layer, name: Softplus}
+    # - {type: layer, name: Linear, out_features: 64}
+    # - {type: layer, name: Softplus}
     # Last layer to get out_channels = message_passer["out_channels"] is automatic
 
 edge_encoder:
   type: sequential_model
-  layers: 
-    - {type: layer, name: Linear, out_features: 8} 
-    - {type: layer, name: Softplus}
+  # layers: 
+    # - {type: layer, name: Linear, out_features: 8} 
+    # - {type: layer, name: Softplus}
 
 message_passer:
   type: repeated_shared_layer
@@ -61,10 +61,10 @@ message_passer:
 
 decoder:
   type: sequential_model
-  layers: 
-    - {type: layer, name: Linear, out_features: 128}
-    - {type: layer, name: Softplus}
-    - {type: layer, name: Linear, out_features: 32}
-    - {type: layer, name: Softplus}
+  # layers: 
+  #   - {type: layer, name: Linear, out_features: 128}
+    # - {type: layer, name: Softplus}
+    # - {type: layer, name: Linear, out_features: 32}
+    # - {type: layer, name: Softplus}
     # Last (Linear) layer for regression is always added by model autonomously
 

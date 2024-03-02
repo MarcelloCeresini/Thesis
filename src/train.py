@@ -254,7 +254,7 @@ def train(
             wandb.log({f"reweighted_{k}":v for k,v in total_loss_dict_reweighted.items()}, epoch)
             for k in loss_dict:
                 loss_weights[k] = (1-conf.lambda_dynamic_weights) * loss_weights.get(k, 1) + \
-                                    conf.lambda_dynamic_weights * (mean_grads[conf.main_loss_component_dynamic]/mean_grads[k])
+                                    conf.lambda_dynamic_weights/conf.gamma_loss * (mean_grads[conf.main_loss_component_dynamic]/mean_grads[k])
 
         if scheduler_for_training_end.num_bad_epochs >= scheduler_for_training_end.patience:
             print(f"Restoring best weights of epoch {best_epoch}")

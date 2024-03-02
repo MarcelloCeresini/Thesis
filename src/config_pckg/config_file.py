@@ -238,6 +238,7 @@ class Config():
         self.dynamic_loss_weights = True
         self.main_loss_component_dynamic = "supervised"
         self.lambda_dynamic_weights = 0.1 # NSFnets arXiv:2003.06496v1
+        self.gamma_loss = 5
 
         self.logging = {
             "model_log_mode": "all",
