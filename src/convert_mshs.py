@@ -62,17 +62,18 @@ if __name__ == "__main__":
     #         obj.save_to_disk(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, name+".pkl"))
 
     #################### 3
-    # meshComplete_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, "*.pkl")))
-    # for path in (pbar := tqdm(meshComplete_paths)):
-    #     with open(path, "rb") as f:
-    #         obj = pickle.load(f)
-    #     pbar.set_description(f"Creating graph of : {obj.name}")
-    #     name = obj.name.split(".")[0].removesuffix("_ascii")
-    #     convert_mesh_complete_info_obj_to_graph(
-    #         conf,
-    #         obj,
-    #         filename_output_graph=os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, name+".pt"),
-    #     )
+    meshComplete_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, "*.pkl")))
+    graph_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, "*.pt")))
+    
+    for path_m, path_g in tqdm(zip(meshComplete_paths, graph_paths)):
+        assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
+        with open(path_m, "rb") as f:
+            obj = pickle.load(f)
+
+        data = torch.load(path_g)
+        data.CcFc_edges = obj.CcFc_edges
+        torch.save(data, path_g)
+
 
 
 def initial_trial():

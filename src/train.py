@@ -232,7 +232,7 @@ def train(
         # torch.cuda.empty_cache()
         if epoch % conf.hyper_params["val"]["n_epochs_val"] == 0:
             val_loss, metric_results = test(val_loader, model, conf, loss_weights)
-            # torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
             if val_loss < best_loss:
                 best_loss = val_loss
@@ -265,8 +265,7 @@ def train(
 
         # scheduler.step(metrics=val_loss)
         # scheduler_for_training_end.step(metrics=val_loss)
-        raise NotImplementedError("debug this")
-        scheduler.step(metrics=sum(metric_results["MAE"]))
-        scheduler_for_training_end.step(metrics=sum(metric_results["MAE"]))
+        scheduler.step(metrics=sum(metric_results["MAE"].values()))
+        scheduler_for_training_end.step(metrics=sum(metric_results["MAE"].values()))
         
     return model

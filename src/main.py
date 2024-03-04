@@ -23,6 +23,7 @@ def print_w_time(str):
 
 
 WANDB_FLAG = True
+# os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True' # useful to expand memory
 
 if __name__ == "__main__":
 

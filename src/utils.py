@@ -616,7 +616,8 @@ def convert_mesh_complete_info_obj_to_graph(
                 face_center_positions=meshCI.face_center_positions,)
 
             data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,-1])
-            
+            data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
+
         else:
             raise NotImplementedError("Implement dim = 3")
     else:
@@ -1253,4 +1254,5 @@ def get_input_to_model(batch):
         "edge_attr": batch.edge_attr,
         "batch": batch.batch,
         "pos": batch.pos,
+        "CcFc_edges": torch.tensor(batch.CcFc_edges[0]), # TODO: change data to remove list
     }

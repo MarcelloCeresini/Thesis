@@ -8,7 +8,7 @@ use_positional_features: True
 
 positional_encoder:
   type: sequential_model
-  # layers: 
+  layers: 
     # - {type: layer, name: Linear, out_features: 32}
     # - {type: layer, name: Softplus}
     # - {type: layer, name: Linear, out_features: 64}
@@ -16,7 +16,7 @@ positional_encoder:
 
 encoder:
   type: sequential_model
-  # layers: 
+  layers: 
     # PUT A HIGHER NUMBER HERE --> at least 32 because it enters with ~160 channels
     # - {type: layer, name: Linear, out_features: 64}
     # - {type: layer, name: Softplus}
@@ -24,13 +24,13 @@ encoder:
 
 edge_encoder:
   type: sequential_model
-  # layers: 
+  layers: 
     # - {type: layer, name: Linear, out_features: 8} 
     # - {type: layer, name: Softplus}
 
 message_passer:
   type: repeated_shared_layer
-  repeats_training: 10
+  repeats_training: 5
   name: Simple_MLPConv # [NNConv, GCNConv, MLPConv, Simple_MLPConv_edges]
   out_channels: 32 # also in_channels are the same, to be able to call multiple times
   attention: False
@@ -62,8 +62,8 @@ message_passer:
 
 decoder:
   type: sequential_model
-  # layers: 
-  #   - {type: layer, name: Linear, out_features: 128}
+  layers: 
+    # - {type: layer, name: Linear, out_features: 128}
     # - {type: layer, name: Softplus}
     # - {type: layer, name: Linear, out_features: 32}
     # - {type: layer, name: Softplus}

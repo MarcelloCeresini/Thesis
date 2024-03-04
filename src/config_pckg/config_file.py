@@ -236,6 +236,19 @@ class Config():
         self.flag_BC_PINN: bool = True
         self.use_positional_features = True
 
+        domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
+                "uniformly_cells"
+        self.domain_sampling = {"mode": domain_sampling_mode, 
+                                    "percentage": 0.01}
+
+        boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
+                "percentage_of_boundary"
+        self.boundary_sampling = {"mode": boundary_sampling_mode, 
+                                    "percentage": 0.1,
+                                    "shift_on_face":True}
+
+        self.graph_sampling_p_for_interpolation = 0.05
+
         self.dynamic_loss_weights = True
         self.main_loss_component_dynamic = "supervised"
         self.lambda_dynamic_weights = 0.1 # NSFnets arXiv:2003.06496v1
@@ -262,7 +275,9 @@ class Config():
             "feat_dict": self.graph_node_feature_dict,
             "mask_dict": self.graph_node_feature_mask,
             "use_positional_features": self.use_positional_features,
-
+            "domain_sampling": self.domain_sampling,
+            "boundary_sampling": self.boundary_sampling,
+            "graph_sampling_p_for_interpolation": self.graph_sampling_p_for_interpolation
         })
 
         return_dict = {

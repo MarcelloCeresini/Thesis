@@ -54,7 +54,6 @@ def get_last_training(conf, from_checkpoints: bool =False):
 
 if __name__ == "__main__":
     conf = Config()
-    model_conf = conf.get_logging_info()
 
     print("Getting dataloaders")
     train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
@@ -80,6 +79,8 @@ if __name__ == "__main__":
     ######## try if the model works
     model_conf = conf.get_logging_info()
     model = get_model_instance(model_conf) # build model
+
+    conf.device = "cpu"
 
     model.to(conf.device)
 

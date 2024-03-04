@@ -46,13 +46,18 @@ def get_obj_from_structure(
         case "sequential_model":
             m_list = []
             curr_channels = in_channels
-            for layer_structure in str_d["layers"]:
-                curr_channels, layer = get_obj_from_structure(
-                    in_channels=curr_channels,
-                    str_d=layer_structure,
-                    conf=conf
-                )
-                m_list.append(layer)
+
+            if str_d["layers"] is not None:
+                for layer_structure in str_d["layers"]:
+                    if layer_structure is None:
+                        continue
+                    
+                    curr_channels, layer = get_obj_from_structure(
+                        in_channels=curr_channels,
+                        str_d=layer_structure,
+                        conf=conf
+                    )
+                    m_list.append(layer)
             
             if out_channels is not None:
                 m_list.append(nn.Linear(in_features=curr_channels, out_features=out_channels))

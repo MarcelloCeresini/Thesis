@@ -166,6 +166,7 @@ class EPD_with_sampling(nn.Module):
         self.add_self_loops = self.model_structure["add_self_loops"]
         self.update_edges = self.model_structure["update_edges"] if "update_edges" in self.model_structure.keys() else False
         self.use_positional_features = self.model_structure["update_edges"]
+        self.graph_sampling_p_for_interpolation = self.conf["hyperparams"]["graph_sampling_p_for_interpolation"]
 
         if self.update_edges:
             self.edges_channels = self.model_structure["edges_channels"]
@@ -279,21 +280,27 @@ class EPD_with_sampling(nn.Module):
                 # positional_encoding_graph_points = self.positional_encoder(pos)
                 # positional_encoding_sampling_points = self.positional_encoder(sampling_points)
                 
-                spatial_diff = sampling_points - pos
-                # latent_diff = positional_encoding_sampling_points - positional_encoding_graph_points
+                n_nodes = pos.shape[0]
+                num_samples = int(n_nodes*self.graph_sampling_p_for_interpolation)
+                sampled_graph_pos = torch.multinomial(
+                    torch.ones(n_nodes, dtype=torch.float), num_samples, replacement=False) # as np.random.choice
+                
 
-                squared_spatial_distance = (spatial_diff*spatial_diff).sum(dim=-1)
+                squared_spatial_distance = torch.pow(sampling_points - pos[sampled_graph_pos,:], 2).sum(dim=-1)
+                # spatial_diff = sampling_points - pos[sampled_graph_pos,:]
+                # latent_diff = positional_encoding_sampling_points - positional_encoding_graph_points
+                # squared_spatial_distance = (spatial_diff*spatial_diff).sum(dim=-1)
                 # squared_latent_distance = (latent_diff*latent_diff).sum(dim=-1, keepdim=True)
 
                 weights = 1.0 / torch.clamp(squared_spatial_distance, min=1e-16)
                 # weights = 1.0 / torch.clamp(squared_spatial_distance + squared_latent_distance, min=1e-16)
-                sampled_points_encoding = torch.einsum("ij,i->j", processed["x"], weights) / weights.sum()
+                sampled_points_encoding = torch.einsum("ij,i->j", 
+                    processed["x"][sampled_graph_pos,:], weights.to(torch.float32)) / weights.sum()
 
             else:
                 sampled_points_encoding = self.positional_encoder(sampling_points)
 
             U_sampled = forward_for_general_layer(self.decoder, {"x": sampled_points_encoding})
-
             return U_sampled["x"], decoded["x"]
             # Decode
         else:
@@ -313,11 +320,8 @@ class PINN(nn.Module):
         self.net = net
         self.conf = conf
 
-        domain_sampling_mode: Literal["all_domain", "percentage_of_domain"] = "percentage_of_domain"
-        self.domain_sampling = {"mode": domain_sampling_mode, "percentage": 0.1}
-
-        boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = "percentage_of_boundary"
-        self.boundary_sampling = {"mode": boundary_sampling_mode, "percentage": 0.1}
+        self.domain_sampling = self.conf["hyperparams"]["domain_sampling"]
+        self.boundary_sampling = self.conf["hyperparams"]["boundary_sampling"]
 
         self.Re = 1/(1.45e-5) # V_char=1, L_char=1
         self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
@@ -359,13 +363,49 @@ class PINN(nn.Module):
         return residual / c
 
 
+    def get_random_position_in_cell(self, cell_idx, CcFc_edges, pos):
+        
+        spatial_positions = pos[CcFc_edges[(CcFc_edges[:,0]==cell_idx),1], :]
+
+        if spatial_positions.shape[0] > 3:
+            tri = Delaunay(spatial_positions, qhull_options="QJ")
+            sampled_simplex = torch.multinomial(
+                torch.ones(tri.simplices.shape[0], dtype=torch.float), 1) # as np.random.choice
+            spatial_positions = tri.points[tri.simplices[sampled_simplex]]
+
+        barycentric_coords = np.random.exponential(scale=1.0, size=3)
+        barycentric_coords /= sum(barycentric_coords)
+
+        cartesian_coords = [np.dot(spatial_positions[:,0], barycentric_coords),
+                                np.dot(spatial_positions[:,1], barycentric_coords)]
+        
+        return cartesian_coords
+
+
+    def get_random_position_on_face(self, x, pos):
+        tangent_versor_x = x[self.conf["hyperparams"]["feat_dict"]["tangent_versor_x"]]
+        tangent_versor_y = x[self.conf["hyperparams"]["feat_dict"]["tangent_versor_y"]]
+        face_area = x[self.conf["hyperparams"]["feat_dict"]["face_area"]]
+
+        lb_x = pos[0] - (tangent_versor_x*face_area)/2
+        ub_x = pos[0] + (tangent_versor_x*face_area)/2
+
+        lb_y = pos[1] - (tangent_versor_y*face_area)/2
+        ub_y = pos[1] + (tangent_versor_y*face_area)/2
+
+        lam = torch.rand(1)
+
+        return lam*lb_x + (1-lam)*ub_x, lam*lb_y + (1-lam)*ub_y
+
+
     def forward(self,
-            x: torch.Tensor, 
+            x: torch.Tensor,
             x_mask: torch.Tensor, 
             edge_index: torch.Tensor, 
             edge_attr: torch.Tensor,
             pos: torch.Tensor,
             batch: torch.Tensor,
+            CcFc_edges: Optional[torch.Tensor] = None,
             # triangulation: Delaunay, # TODO: if sampling = "all" precompute triangulation for each sample to ease computation 
             **kwargs
         ):
@@ -374,32 +414,57 @@ class PINN(nn.Module):
         edge_attr = edge_attr[:, torch.tensor([0,1,3])]
 
         idxs_isnt_BC = (x_mask[:,-1] == 0)
-        if self.domain_sampling["mode"] == "all_domain":
-            idxs_domain_sampled = idxs_isnt_BC
-        elif self.domain_sampling["mode"] == "percentage_of_domain":
-            num_samples = int(self.domain_sampling["percentage"] * idxs_isnt_BC.count_nonzero())
-            idxs_domain_sampled = torch.multinomial(idxs_isnt_BC.to(torch.float), num_samples, replacement=False) # as np.random.choice
-        else:
-            raise NotImplementedError()
+        match self.domain_sampling["mode"]:
+            case "all_domain":
+                idxs_domain_sampled = idxs_isnt_BC
+            case "percentage_of_domain":
+                num_samples = int(self.domain_sampling["percentage"] * idxs_isnt_BC.count_nonzero())
+                idxs_domain_sampled = \
+                    torch.multinomial(idxs_isnt_BC.to(torch.float), num_samples, replacement=False) # as np.random.choice
+                domain_sampling_points = pos[idxs_domain_sampled]
+            case "uniformly_cells":
+                assert CcFc_edges is not None, "Cannot sample from cells if CcFc_edges is not provided"
+                num_samples = int(self.domain_sampling["percentage"] * CcFc_edges.shape[0])
+                idxs_domain_sampled_cells = \
+                    torch.multinomial(torch.ones(num_samples, dtype=torch.float), num_samples, replacement=False) # as np.random.choice
+
+                domain_sampling_points = np.stack([self.get_random_position_in_cell(cell_idx, CcFc_edges, pos) 
+                        for cell_idx in idxs_domain_sampled_cells])
+                
+                domain_sampling_points = torch.tensor(domain_sampling_points)
+
+            case _:
+                raise NotImplementedError()
         
-        domain_sampling_points = torch.autograd.Variable(pos[idxs_domain_sampled], requires_grad=True)
+
+        domain_sampling_points = torch.autograd.Variable(domain_sampling_points, requires_grad=True)
         
         idxs_is_BC = (x_mask[:,-1] == 1)
-        if self.boundary_sampling["mode"] == "all_boundary":
-            idxs_boundary_sampled = idxs_is_BC
-        elif self.boundary_sampling["mode"] == "percentage_of_boundary":
-            num_samples = int(self.boundary_sampling["percentage"] * idxs_is_BC.count_nonzero())
-            idxs_boundary_sampled = torch.multinomial(idxs_is_BC.to(torch.float), num_samples, replacement=False) # as np.random.choice
-        else:
-            raise NotImplementedError("Only 'all' is implemented for now")
+        match self.boundary_sampling["mode"]:
+            case "all_boundary":
+                idxs_boundary_sampled = idxs_is_BC
+            case "percentage_of_boundary":
+                num_samples = int(self.boundary_sampling["percentage"] * idxs_is_BC.count_nonzero())
+                idxs_boundary_sampled = torch.multinomial(idxs_is_BC.to(torch.float), num_samples, replacement=False) # as np.random.choice
+            case _:
+                raise NotImplementedError("Only 'all' is implemented for now")
         
-        # TODO: do i need to add as variable also x and x_mask? because they are used to compute residuals
         x_BC, x_mask_BC = x[idxs_boundary_sampled], x_mask[idxs_boundary_sampled]
-        boundary_sampling_points = torch.autograd.Variable(pos[idxs_boundary_sampled], requires_grad=True)
+
+        if self.boundary_sampling["shift_on_face"]:
+            boundary_sampling_points = vmap(
+                self.get_random_position_on_face, randomness="different")(
+                x_BC, pos[idxs_boundary_sampled]
+            )
+            boundary_sampling_points = torch.concatenate(boundary_sampling_points, dim=1)
+        else:
+            boundary_sampling_points = pos[idxs_boundary_sampled]
+
+        boundary_sampling_points = torch.autograd.Variable(boundary_sampling_points, requires_grad=True)
+        # TODO: do i need to add as variable also x and x_mask? because they are used to compute residuals
         
         model_params = ({k: v for k, v in self.net.named_parameters()}, 
                         {k: v for k, v in self.net.named_buffers()},)
-
 
         def compute_output(sampling_points):
             out_samp, out_sup = functional_call(
@@ -421,8 +486,9 @@ class PINN(nn.Module):
                 jacrev(compute_first_derivative, has_aux=True)(sampling_points)
             return hess_samp, grads_samp, out_samp, out_sup
         
-        hess_samp, grads_samp, out_samp, out_sup = vmap(compute_second_derivative, out_dims=(0,0,0,None))(
-            torch.concatenate((domain_sampling_points, boundary_sampling_points))
+        hess_samp, grads_samp, out_samp, out_sup = vmap(
+            compute_second_derivative, out_dims=(0,0,0,None), randomness="different")(
+                torch.concatenate((domain_sampling_points, boundary_sampling_points))
         )
 
         domain_slice = torch.arange(domain_sampling_points.shape[0])
