@@ -16,7 +16,6 @@ from torch_geometric.utils.convert import to_networkx
 import networkx, rustworkx
 from time import time
 
-
 import utils
 from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders
@@ -39,6 +38,7 @@ def get_training_data(run_name, conf, from_checkpoints:bool):
     model.eval()
 
     return model, model_conf
+
 
 
 def get_last_training(conf, from_checkpoints: bool =False):
@@ -79,8 +79,6 @@ if __name__ == "__main__":
     ######## try if the model works
     model_conf = conf.get_logging_info()
     model = get_model_instance(model_conf) # build model
-
-    conf.device = "cpu"
 
     model.to(conf.device)
 

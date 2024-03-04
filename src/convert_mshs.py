@@ -3,9 +3,11 @@ import pickle
 from time import time
 from typing import Optional
 import glob
+import numpy as np
 from tqdm import tqdm
 
 import torch
+from scipy.spatial import Delaunay
 
 from config_pckg.config_file import Config
 from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph
@@ -40,6 +42,20 @@ def convert_all_msh_to_meshComplete(conf: Config(), output_dir: str, input_dir: 
         meshCompleteInstance = convert_msh_to_mesh_complete_info_obj(conf, filename, meshComplete_filename)
 
 
+def get_triangulated_cells(vertices_in_cells, pos):
+    all_triangles = []
+
+    for vertices in vertices_in_cells:
+        if len(vertices) > 3:
+            tri = Delaunay(pos[vertices, :2], qhull_options="QJ")
+
+            for simplex in tri.simplices:
+                all_triangles.append(tri.points[simplex])
+        else:
+            all_triangles.append(pos[vertices, :2])
+    return np.stack(all_triangles)
+
+
 if __name__ == "__main__":
     conf = Config()
 
@@ -71,7 +87,10 @@ if __name__ == "__main__":
             obj = pickle.load(f)
 
         data = torch.load(path_g)
-        data.CcFc_edges = obj.CcFc_edges
+
+        triangulated_cells = get_triangulated_cells(obj.vertices_in_cells, obj.mesh.points)
+
+        data.triangulated_cells = torch.tensor(triangulated_cells)
         torch.save(data, path_g)
 
 

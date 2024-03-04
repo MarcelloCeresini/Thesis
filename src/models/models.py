@@ -365,6 +365,11 @@ class PINN(nn.Module):
 
     def get_random_position_in_cell(self, cell_idx, CcFc_edges, pos):
         
+        # FIXME: parallelize this and don't pull down on cpu --> 
+        # create the full triangulation inside the data obj directly
+        # matrix [n_triangles, 3(vertices), 2(x,y)]
+        # sample triangle --> sample point inside triangle
+
         spatial_positions = pos[CcFc_edges[(CcFc_edges[:,0]==cell_idx),1], :]
 
         if spatial_positions.shape[0] > 3:
@@ -393,7 +398,7 @@ class PINN(nn.Module):
         lb_y = pos[1] - (tangent_versor_y*face_area)/2
         ub_y = pos[1] + (tangent_versor_y*face_area)/2
 
-        lam = torch.rand(1)
+        lam = torch.rand(1, device=x.device)
 
         return lam*lb_x + (1-lam)*ub_x, lam*lb_y + (1-lam)*ub_y
 
@@ -428,15 +433,15 @@ class PINN(nn.Module):
                 idxs_domain_sampled_cells = \
                     torch.multinomial(torch.ones(num_samples, dtype=torch.float), num_samples, replacement=False) # as np.random.choice
 
-                domain_sampling_points = np.stack([self.get_random_position_in_cell(cell_idx, CcFc_edges, pos) 
+                cpu_pos = pos.cpu()
+                domain_sampling_points = np.stack([self.get_random_position_in_cell(cell_idx, CcFc_edges, cpu_pos) 
                         for cell_idx in idxs_domain_sampled_cells])
                 
-                domain_sampling_points = torch.tensor(domain_sampling_points)
+                domain_sampling_points = torch.tensor(domain_sampling_points, device=x.device)
 
             case _:
                 raise NotImplementedError()
         
-
         domain_sampling_points = torch.autograd.Variable(domain_sampling_points, requires_grad=True)
         
         idxs_is_BC = (x_mask[:,-1] == 1)

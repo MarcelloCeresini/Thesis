@@ -244,10 +244,10 @@ class Config():
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "percentage_of_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
-                                    "percentage": 0.1,
+                                    "percentage": 0.01,
                                     "shift_on_face":True}
 
-        self.graph_sampling_p_for_interpolation = 0.05
+        self.graph_sampling_p_for_interpolation = 0.01
 
         self.dynamic_loss_weights = True
         self.main_loss_component_dynamic = "supervised"
