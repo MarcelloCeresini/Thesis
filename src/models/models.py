@@ -165,6 +165,8 @@ class EPD_with_sampling(nn.Module):
         self.model_structure = model_structure
         self.add_self_loops = self.model_structure["add_self_loops"]
         self.update_edges = self.model_structure["update_edges"] if "update_edges" in self.model_structure.keys() else False
+        self.use_positional_features = self.model_structure["update_edges"]
+
         if self.update_edges:
             self.edges_channels = self.model_structure["edges_channels"]
 
@@ -264,20 +266,38 @@ class EPD_with_sampling(nn.Module):
         
         # Process
         for _ in range(self.model_structure["message_passer"]["repeats_training"]):
-            tmp = forward_for_general_layer(self.message_passer, X)
-            X.update(tmp)
+            processed = forward_for_general_layer(self.message_passer, X)
+            X.update(processed)
             X.update({"x_graph": pyg_nn.pool.global_mean_pool(X["x"], batch)}) # Graph encoding is updated even when not used
         
-        # x_sampled_on_domain = pyg_nn.unpool.knn_interpolate(X["x"], pos, domain_sampling_points, k=3)
-        tmp = forward_for_general_layer(self.decoder, X)
+        decoded = forward_for_general_layer(self.decoder, X)
         
         if sampling_points is not None:
-            sampled_points_encoding = self.positional_encoder(sampling_points) # this doesn't work, id doesn't pass through processor
+
+            if self.use_positional_features:
+                # FIXME: we NEED knn to be scalable, but with functional_call+vmap it doesn't work
+                # positional_encoding_graph_points = self.positional_encoder(pos)
+                # positional_encoding_sampling_points = self.positional_encoder(sampling_points)
+                
+                spatial_diff = sampling_points - pos
+                # latent_diff = positional_encoding_sampling_points - positional_encoding_graph_points
+
+                squared_spatial_distance = (spatial_diff*spatial_diff).sum(dim=-1)
+                # squared_latent_distance = (latent_diff*latent_diff).sum(dim=-1, keepdim=True)
+
+                weights = 1.0 / torch.clamp(squared_spatial_distance, min=1e-16)
+                # weights = 1.0 / torch.clamp(squared_spatial_distance + squared_latent_distance, min=1e-16)
+                sampled_points_encoding = torch.einsum("ij,i->j", processed["x"], weights) / weights.sum()
+
+            else:
+                sampled_points_encoding = self.positional_encoder(sampling_points)
+
             U_sampled = forward_for_general_layer(self.decoder, {"x": sampled_points_encoding})
-            return U_sampled["x"], tmp["x"]
+
+            return U_sampled["x"], decoded["x"]
             # Decode
         else:
-            return tmp["x"]
+            return decoded["x"]
 
             
     def loss(self, pred:torch.Tensor, label:torch.Tensor):
@@ -294,10 +314,10 @@ class PINN(nn.Module):
         self.conf = conf
 
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain"] = "percentage_of_domain"
-        self.domain_sampling = {"mode": domain_sampling_mode, "percentage": 0.8}
+        self.domain_sampling = {"mode": domain_sampling_mode, "percentage": 0.1}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = "percentage_of_boundary"
-        self.boundary_sampling = {"mode": boundary_sampling_mode, "percentage": 0.8}
+        self.boundary_sampling = {"mode": boundary_sampling_mode, "percentage": 0.1}
 
         self.Re = 1/(1.45e-5) # V_char=1, L_char=1
         self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}

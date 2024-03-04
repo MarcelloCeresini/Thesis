@@ -234,6 +234,7 @@ class Config():
 
         self.PINN_mode: Literal["continuity_only", "full_laminar"] = "continuity_only"
         self.flag_BC_PINN: bool = True
+        self.use_positional_features = True
 
         self.dynamic_loss_weights = True
         self.main_loss_component_dynamic = "supervised"
@@ -260,6 +261,7 @@ class Config():
             "flag_BC_PINN": self.flag_BC_PINN,
             "feat_dict": self.graph_node_feature_dict,
             "mask_dict": self.graph_node_feature_mask,
+            "use_positional_features": self.use_positional_features,
 
         })
 
