@@ -38,6 +38,8 @@ class Config():
         self.test_vtksz_comparisons = os.path.join(self.DATA_DIR, "test_vtksz_comparisons")
         # self.standard_dataloader_path = os.path.join(self.DATA_DIR, "dataloaders.pt")
 
+        self.DATA_SERVER_PATH = "/public.hpc/marcello.ceresini"
+        self.server_datalist_path = os.path.join(self.DATA_SERVER_PATH, "datalists.pt")
 
         self.problematic_files = {"2dtc_002R074_001_s01"}
 

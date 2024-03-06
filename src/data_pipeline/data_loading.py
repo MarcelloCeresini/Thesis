@@ -10,7 +10,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Batch
 
 
-def get_data_loaders(conf: Config, load_from_disk = False, save_to_disk = False) -> None:
+def get_data_loaders(conf: Config, load_from_disk = True, save_to_disk = False) -> None:
     # TODO: implement transformation to add labels during loader creation
     # to avoid saving n different graphs for n different snapshots of the same simulation
 
@@ -19,6 +19,9 @@ def get_data_loaders(conf: Config, load_from_disk = False, save_to_disk = False)
         if os.path.isfile(conf.standard_datalist_path):
             data_list_train, data_list_val, data_list_test = torch.load(conf.standard_datalist_path)
             data_found = True
+        elif os.path.isfile(conf.server_datalist_path):
+            data_list_train, data_list_val, data_list_test = torch.load(conf.standard_datalist_path)
+            data_found = True:
         else:
             print("No datalist at standard path, creating them from scratch")
     
