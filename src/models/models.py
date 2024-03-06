@@ -18,6 +18,7 @@ from torch.func import functional_call, vmap, jacrev, hessian
 
 from scipy.spatial import Delaunay
 from scipy.interpolate import LinearNDInterpolator
+import pyvista
 
 from config_pckg.config_file import Config 
 from loss_pckg.losses import MSE_loss
@@ -165,8 +166,7 @@ class EPD_with_sampling(nn.Module):
         self.model_structure = model_structure
         self.add_self_loops = self.model_structure["add_self_loops"]
         self.update_edges = self.model_structure["update_edges"] if "update_edges" in self.model_structure.keys() else False
-        self.use_positional_features = self.model_structure["update_edges"]
-        self.graph_sampling_p_for_interpolation = self.conf["hyperparams"]["graph_sampling_p_for_interpolation"]
+        
 
         if self.update_edges:
             self.edges_channels = self.model_structure["edges_channels"]
@@ -178,6 +178,20 @@ class EPD_with_sampling(nn.Module):
             out_channels=model_structure["message_passer"]["out_channels"],
         )
 
+        match self.conf["hyperparams"]["inference_mode_latent_sampled_points"]:
+            case "squared_distance":
+                self.use_positional_features = True
+                self.graph_sampling_p_for_interpolation = self.conf["hyperparams"]["graph_sampling_p_for_interpolation"]
+            case "fourier_features":
+                self.use_fourier_features = True
+                self.fourier_pos_enc_matrix = torch.nn.Parameter(
+                    torch.nn.init.normal_(
+                        tensor=torch.zeros(2, self.conf["hyperparams"]["fourier_feat_dim"]), 
+                            mean=0, std=1
+                    ))
+
+                input_dim += 2*self.conf["hyperparams"]["fourier_feat_dim"]
+        
         current_dim, self.encoder = get_obj_from_structure(
             in_channels=input_dim, 
             str_d=model_structure["encoder"],
@@ -215,6 +229,13 @@ class EPD_with_sampling(nn.Module):
         )
 
 
+    def get_fourier_pos_enc(self, x, learnable_matrix) -> torch.Tensor:
+        '''https://arxiv.org/pdf/2106.02795.pdf'''
+        return torch.concatenate(
+                (torch.cos(x@learnable_matrix), torch.sin(x@learnable_matrix)), dim=-1
+            ) / (2*learnable_matrix.shape[1]**(0.5))
+
+
     # def forward(self, data: pyg_data.Data):
     def forward(self,
             x: torch.Tensor, 
@@ -244,6 +265,11 @@ class EPD_with_sampling(nn.Module):
         }
         # edge_attr is 3d relative distance between nodes + the norm (4 columns)
 
+        if self.use_fourier_features:
+            input_fourier_features = \
+                self.get_fourier_pos_enc(pos, self.fourier_pos_enc_matrix)
+
+            X["x"] = torch.concat((X["x"], input_fourier_features), dim=1)
         # Encode features
         tmp = forward_for_general_layer(self.encoder, X)
         X.update(tmp)
@@ -251,12 +277,7 @@ class EPD_with_sampling(nn.Module):
         if self.update_edges:
             tmp = forward_for_general_layer(self.edge_encoder, {"edge_attr": X["edge_attr"]})
             X.update(tmp)
-
-        # Create graph-level and 'boundary' features
-        # TODO: improve "boundary" by inserting relative distance (through pos) in computation
-        # use a message passing with np_ones as adjacency matrix and give "pos_i" and "pos_j" inside propagate
-        # then inside message give inside the MLP that encodes the message "pos_i - pos_j" as input
-        # ALSO PASS BATCH otherwise you connect different graphs
+        
         x_BC = X["x"][BC_idxs, :]
         batch_BC = X["batch"][BC_idxs]
 
@@ -268,6 +289,7 @@ class EPD_with_sampling(nn.Module):
         # Process
         for _ in range(self.model_structure["message_passer"]["repeats_training"]):
             processed = forward_for_general_layer(self.message_passer, X)
+            # processed = {k: v / torch.linalg.vector_norm(v, dim=-1, keepdim=True) for k,v in processed.items()}
             X.update(processed)
             X.update({"x_graph": pyg_nn.pool.global_mean_pool(X["x"], batch)}) # Graph encoding is updated even when not used
         
@@ -275,32 +297,62 @@ class EPD_with_sampling(nn.Module):
         
         if sampling_points is not None:
 
-            if self.use_positional_features:
-                # FIXME: we NEED knn to be scalable, but with functional_call+vmap it doesn't work
-                # positional_encoding_graph_points = self.positional_encoder(pos)
-                # positional_encoding_sampling_points = self.positional_encoder(sampling_points)
-                
-                n_nodes = pos.shape[0]
-                num_samples = int(n_nodes*self.graph_sampling_p_for_interpolation)
-                sampled_graph_pos = torch.multinomial(
-                    torch.ones(n_nodes, dtype=torch.float), num_samples, replacement=False) # as np.random.choice
-                
+            match self.conf["hyperparams"]["inference_mode_latent_sampled_points"]:
+                case "squared_distance":
+                    # FIXME: we NEED knn to be scalable, but with functional_call+vmap it doesn't work
+                    # positional_encoding_graph_points = self.positional_encoder(pos)
+                    # positional_encoding_sampling_points = self.positional_encoder(sampling_points)
+                    
+                    n_nodes = pos.shape[0]
+                    num_samples = int(n_nodes*self.graph_sampling_p_for_interpolation)
+                    sampled_graph_pos = torch.multinomial(
+                        torch.ones(n_nodes, dtype=torch.float), num_samples, replacement=False) # as np.random.choice
+                    
+                    squared_spatial_distance = torch.pow(sampling_points - pos[sampled_graph_pos,:], 2).sum(dim=-1)
+                    # spatial_diff = sampling_points - pos[sampled_graph_pos,:]
+                    # latent_diff = positional_encoding_sampling_points - positional_encoding_graph_points
+                    # squared_spatial_distance = (spatial_diff*spatial_diff).sum(dim=-1)
+                    # squared_latent_distance = (latent_diff*latent_diff).sum(dim=-1, keepdim=True)
 
-                squared_spatial_distance = torch.pow(sampling_points - pos[sampled_graph_pos,:], 2).sum(dim=-1)
-                # spatial_diff = sampling_points - pos[sampled_graph_pos,:]
-                # latent_diff = positional_encoding_sampling_points - positional_encoding_graph_points
-                # squared_spatial_distance = (spatial_diff*spatial_diff).sum(dim=-1)
-                # squared_latent_distance = (latent_diff*latent_diff).sum(dim=-1, keepdim=True)
+                    weights = 1.0 / torch.clamp(squared_spatial_distance, min=1e-16)
+                    weights /= weights.sum()
+                    # weights = 1.0 / torch.clamp(squared_spatial_distance + squared_latent_distance, min=1e-16)
+                    sampled_points_encoding = torch.einsum("ij,i->j", 
+                        processed["x"][sampled_graph_pos,:], weights.to(torch.float32))
 
-                weights = 1.0 / torch.clamp(squared_spatial_distance, min=1e-16)
-                # weights = 1.0 / torch.clamp(squared_spatial_distance + squared_latent_distance, min=1e-16)
-                sampled_points_encoding = torch.einsum("ij,i->j", 
-                    processed["x"][sampled_graph_pos,:], weights.to(torch.float32)) / weights.sum()
+                case "fourier_features":
+                    # https://arxiv.org/pdf/2007.14902.pdf --> linear approximated attention
+                    # the approximation is in the softmax, that is transformed in its first-order Taylor series
+                    # similarity_func(q,k) = e**(q@k) ~~ 1+q@k. 
+                    # To assure its positivity (because it is a similarity measure) we normalize, so that q@k >= -1.
+                    # Then we simplify and compute keys/values AGGREGATED quantities to re-use for all queries
+                    # This is even better in our case because it's cross attention, so we can have N_queries >> N_keys if we wish
+                    # And still keep memory requirements linear with N_keys
 
-            else:
-                sampled_points_encoding = self.positional_encoder(sampling_points)
+                    # OSS: move all except results to double, to avoid NaNs
+                    sampling_points_fourier_features = \
+                        self.get_fourier_pos_enc(sampling_points, self.fourier_pos_enc_matrix)
 
-            U_sampled = forward_for_general_layer(self.decoder, {"x": sampled_points_encoding})
+                    query = sampling_points_fourier_features.to(torch.float64)        # [1,K]
+                    keys = input_fourier_features.to(torch.float64)                   # [N,K]
+                    values = processed["x"].to(torch.float64)                         # [N,V]
+                    N = keys.shape[0]
+
+                    norm_query = query / torch.linalg.vector_norm(query, keepdim=True)
+                    norm_keys = keys / torch.linalg.vector_norm(keys, dim=1, keepdim=True)
+
+                    vals_sum = torch.sum(values, dim=0)             # [1,V]
+                    key_weighted_vals_sum = norm_keys.T @ values    # [K,V]
+                    keys_sum = torch.sum(norm_keys, dim=0)          # [1,K]
+
+                    sampled_points_encoding = (vals_sum + norm_query@key_weighted_vals_sum) \
+                        / (N + norm_query@keys_sum)
+                    
+                case "baseline_positional_encoder":
+                    raise NotImplementedError("need to debug")
+                    sampled_points_encoding = self.positional_encoder(sampling_points)
+
+            U_sampled = forward_for_general_layer(self.decoder, {"x": sampled_points_encoding.to(torch.float32)})
             return U_sampled["x"], decoded["x"]
             # Decode
         else:
@@ -331,60 +383,56 @@ class PINN(nn.Module):
         feat_dict = self.conf['hyperparams']["feat_dict"]
         mask_dict = self.conf['hyperparams']["mask_dict"]
 
+        mask_dict_copy = mask_dict.copy()
+        mask_dict_copy.pop("is_BC")
+
         t_x, t_y = x[feat_dict["tangent_versor_x"]], x[feat_dict["tangent_versor_y"]]
         n_x, n_y = -t_y, +t_x
 
-        residual = torch.zeros_like(p_x, device=p_x.device)
+        residual = {k: torch.zeros_like(p_x, device=p_x.device) for k in mask_dict_copy}
         c = torch.zeros_like(p_x, device=p_x.device)
-        for k in mask_dict:
+        # TODO: dynamic weights for these components?
+        for k in mask_dict_copy:
             match k:
                 case "v_t":
                     v_t_pred = (t_x*u + t_y*v)
-                    residual += (v_t_pred - x[feat_dict["v_t"]]).abs()       * x_mask[mask_dict[k]]
+                    residual["v_t"] += (v_t_pred - x[feat_dict["v_t"]]).abs()       * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                 case "v_n": # "inward" is not a problem with walls because v_n should always be 0 --> no matter the direction 
                     v_n_pred = (n_x*u + n_y*v)
-                    residual += (v_n_pred - x[feat_dict["v_n"]]).abs()       * x_mask[mask_dict[k]]
+                    residual["v_n"] += (v_n_pred - x[feat_dict["v_n"]]).abs()       * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                 case "p":
-                    residual += (p - x[feat_dict["p"]]).abs()                * x_mask[mask_dict[k]]
+                    residual["p"] += (p - x[feat_dict["p"]]).abs()                  * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                 case "dv_dn": # pressure-outlet = n_x*U_x + n_y*U_y = n_x*u_x + n_y*v_y
                     dv_dn_pred = (n_x*u_x + n_y*v_y)
-                    residual += (dv_dn_pred - x[feat_dict["dv_dn"]]).abs()   * x_mask[mask_dict[k]]
+                    residual["dv_dn"] += (dv_dn_pred - x[feat_dict["dv_dn"]]).abs() * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                     # should be torch.dot(normal, (u_x, v_y)), but pressure-outlet is vertical
                     # residual += u_x.square()
                 case "dp_dn": # 
                     dp_dn_pred = (n_x*p_x + n_y*p_y)
-                    residual += (dp_dn_pred - x[feat_dict["dp_dn"]]).abs()   * x_mask[mask_dict[k]]
+                    residual["dp_dn"] += (dp_dn_pred - x[feat_dict["dp_dn"]]).abs() * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
         
-        return residual / c
+        residual.update({"total":sum(residual.values())/c})
+        return residual
 
 
-    def get_random_position_in_cell(self, cell_idx, CcFc_edges, pos):
-        
-        # FIXME: parallelize this and don't pull down on cpu --> 
-        # create the full triangulation inside the data obj directly
-        # matrix [n_triangles, 3(vertices), 2(x,y)]
-        # sample triangle --> sample point inside triangle
-
-        spatial_positions = pos[CcFc_edges[(CcFc_edges[:,0]==cell_idx),1], :]
-
-        if spatial_positions.shape[0] > 3:
-            tri = Delaunay(spatial_positions, qhull_options="QJ")
-            sampled_simplex = torch.multinomial(
-                torch.ones(tri.simplices.shape[0], dtype=torch.float), 1) # as np.random.choice
-            spatial_positions = tri.points[tri.simplices[sampled_simplex]]
-
-        barycentric_coords = np.random.exponential(scale=1.0, size=3)
+    def get_random_position_in_simplex(self, spatial_positions):
+        '''Uniform sampling inside simplex --> each coordinate is the linear combination of
+            vertex coordinates, with weights sampled from an exponential distribution and then normalized
+            
+            Since we cannot get different random inplace sampling with vmap, we exploit the inverse transform sampling
+            https://en.wikipedia.org/wiki/Inverse_transform_sampling#Definition
+            and sample x from a uniform to then transform it to an exponential by -ln(x)'''
+        eps = torch.finfo(torch.float64).eps
+        barycentric_coords = - torch.rand(3, 
+            device=spatial_positions.device, dtype=torch.float64).clamp(min=eps).log() 
         barycentric_coords /= sum(barycentric_coords)
-
-        cartesian_coords = [np.dot(spatial_positions[:,0], barycentric_coords),
-                                np.dot(spatial_positions[:,1], barycentric_coords)]
-        
-        return cartesian_coords
+        barycentric_coords = barycentric_coords.to(torch.float32)
+        return vmap(torch.dot, in_dims=(1,None))(spatial_positions, barycentric_coords)
 
 
     def get_random_position_on_face(self, x, pos):
@@ -410,13 +458,14 @@ class PINN(nn.Module):
             edge_attr: torch.Tensor,
             pos: torch.Tensor,
             batch: torch.Tensor,
-            CcFc_edges: Optional[torch.Tensor] = None,
+            triangulated_cells: Optional[torch.Tensor] = None,
             # triangulation: Delaunay, # TODO: if sampling = "all" precompute triangulation for each sample to ease computation 
             **kwargs
         ):
         
         pos = pos[:,:2]
         edge_attr = edge_attr[:, torch.tensor([0,1,3])]
+        triangulated_cells = triangulated_cells.to(torch.float32)
 
         idxs_isnt_BC = (x_mask[:,-1] == 0)
         match self.domain_sampling["mode"]:
@@ -425,20 +474,19 @@ class PINN(nn.Module):
             case "percentage_of_domain":
                 num_samples = int(self.domain_sampling["percentage"] * idxs_isnt_BC.count_nonzero())
                 idxs_domain_sampled = \
-                    torch.multinomial(idxs_isnt_BC.to(torch.float), num_samples, replacement=False) # as np.random.choice
+                    torch.multinomial(idxs_isnt_BC.to(torch.float), 
+                                        num_samples, replacement=False) # as np.random.choice
                 domain_sampling_points = pos[idxs_domain_sampled]
             case "uniformly_cells":
-                assert CcFc_edges is not None, "Cannot sample from cells if CcFc_edges is not provided"
-                num_samples = int(self.domain_sampling["percentage"] * CcFc_edges.shape[0])
+                assert triangulated_cells is not None, "Cannot sample from cells if CcFc_edges is not provided"
+                num_samples = int(self.domain_sampling["percentage"] * triangulated_cells.shape[0])
                 idxs_domain_sampled_cells = \
-                    torch.multinomial(torch.ones(num_samples, dtype=torch.float), num_samples, replacement=False) # as np.random.choice
+                    torch.multinomial(torch.ones(triangulated_cells.shape[0], dtype=torch.float), 
+                                        num_samples, replacement=False) # as np.random.choice
 
-                cpu_pos = pos.cpu()
-                domain_sampling_points = np.stack([self.get_random_position_in_cell(cell_idx, CcFc_edges, cpu_pos) 
-                        for cell_idx in idxs_domain_sampled_cells])
+                domain_sampling_points = vmap(self.get_random_position_in_simplex, randomness="different") \
+                    (triangulated_cells[idxs_domain_sampled_cells,...])
                 
-                domain_sampling_points = torch.tensor(domain_sampling_points, device=x.device)
-
             case _:
                 raise NotImplementedError()
         
@@ -453,7 +501,7 @@ class PINN(nn.Module):
                 idxs_boundary_sampled = torch.multinomial(idxs_is_BC.to(torch.float), num_samples, replacement=False) # as np.random.choice
             case _:
                 raise NotImplementedError("Only 'all' is implemented for now")
-        
+
         x_BC, x_mask_BC = x[idxs_boundary_sampled], x_mask[idxs_boundary_sampled]
 
         if self.boundary_sampling["shift_on_face"]:
@@ -470,6 +518,12 @@ class PINN(nn.Module):
         
         model_params = ({k: v for k, v in self.net.named_parameters()}, 
                         {k: v for k, v in self.net.named_buffers()},)
+
+        # import matplotlib.pyplot as plt
+        # a = domain_sampling_points.detach().numpy()
+        # b = boundary_sampling_points.detach().numpy()
+        # plt.scatter(a[:,0], a[:,1], color="b")
+        # plt.scatter(b[:,0], b[:,1], color="r")
 
         def compute_output(sampling_points):
             out_samp, out_sup = functional_call(
@@ -496,6 +550,16 @@ class PINN(nn.Module):
                 torch.concatenate((domain_sampling_points, boundary_sampling_points))
         )
 
+        if torch.isnan(hess_samp).sum() > 0:
+            print(hess_samp)
+        if torch.isnan(grads_samp).sum() > 0:
+            print(grads_samp)
+        if torch.isnan(out_samp).sum() > 0:
+            print(out_samp)
+        if torch.isnan(out_sup).sum() > 0:
+            print(out_sup)
+        
+
         domain_slice = torch.arange(domain_sampling_points.shape[0])
         boundary_slice = torch.arange(start=domain_sampling_points.shape[0], 
                                         end=domain_sampling_points.shape[0]+boundary_sampling_points.shape[0])
@@ -515,6 +579,8 @@ class PINN(nn.Module):
                 slice_idxs, hess_samp, grads_samp, out_samp)
             residuals = {}
             match self.conf['hyperparams']["PINN_mode"]:
+                case "supervised_only":
+                    pass
                 case "continuity_only":
                     residuals.update({"continuity": (u_x + v_y)})
                 case "full_laminar":
@@ -531,15 +597,21 @@ class PINN(nn.Module):
             u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
                 slice_idxs, hess_samp, grads_samp, out_samp)
             if self.conf['hyperparams']["flag_BC_PINN"]:
-                return {"boundary": vmap(self.get_BC_residuals_single_sample)(
+                residuals = vmap(self.get_BC_residuals_single_sample)(
                     x_BC, x_mask_BC, u, v, p, u_x, v_y, p_x, p_y
-                )}
+                )
+                return {"BC_"+k: v for k,v in residuals.items()}
             else:
                 return {}
 
         residuals = {}
         residuals.update(get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp))
-        residuals.update(get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp))
+        
+        boundary_residuals = get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp)
+        
+        if boundary_residuals.get("BC_total", None) is not None:
+            residuals.update({"boundary": boundary_residuals["BC_total"]})
+
 
         return out_sup, residuals
 
@@ -555,3 +627,20 @@ class PINN(nn.Module):
         loss_dict.update({k: v.abs().mean() for k,v in residuals.items()})
         
         return sum(loss_dict.values()), loss_dict
+
+
+
+def plot_continuity(pos: torch.Tensor, res: torch.Tensor):
+    points = np.stack([
+        pos[:,0].detach().cpu().numpy(), 
+        pos[:,1].detach().cpu().numpy(), 
+        res["continuity"].detach().cpu().numpy()]).T
+    
+    range_x = points[:,0].max() - points[:,0].min()
+    range_y = points[:,1].max() - points[:,1].min()
+    range_z = points[:,2].max() - points[:,2].min()
+
+    points[:,2] = points[:,2]/range_z*max(range_x, range_y)*0.1
+
+    pointcloud = pyvista.PolyData(points)
+    pointcloud.plot()

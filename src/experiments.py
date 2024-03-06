@@ -15,6 +15,7 @@ from torch_geometric.nn import summary
 from torch_geometric.utils.convert import to_networkx
 import networkx, rustworkx
 from time import time
+import matplotlib.pyplot as plt
 
 import utils
 from config_pckg.config_file import Config
@@ -80,6 +81,8 @@ if __name__ == "__main__":
     model_conf = conf.get_logging_info()
     model = get_model_instance(model_conf) # build model
 
+    conf.device = "cpu"
+
     model.to(conf.device)
 
     opt = Adam(
@@ -92,15 +95,11 @@ if __name__ == "__main__":
     for batch in train_dataloader:
         batch.to(conf.device)
         break
+    # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
     y = model(**get_input_to_model(batch))
+    # plt.show()
     loss = model.loss(y, batch.y)
     loss[0].backward()
     opt.step()
     model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
     print(model_summary)
-
-
-    ########## Convert msh to graph
-    
-
-    ######### update graphs

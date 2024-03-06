@@ -232,31 +232,40 @@ class Config():
         self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)+self.n_radial_attributes
         self.output_dim = len(self.labels_to_keep_for_training)
 
-        self.PINN_mode: Literal["continuity_only", "full_laminar"] = "continuity_only"
-        self.flag_BC_PINN: bool = True
-        self.use_positional_features = True
+        self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar"] = \
+            "continuity_only"
+        self.flag_BC_PINN: bool = False
+        self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder"] = \
+            "fourier_features"
+        self.graph_sampling_p_for_interpolation = 0.01
+        self.fourier_feat_dim = 32
 
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.01}
+                                    "percentage": 0.8}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "percentage_of_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
-                                    "percentage": 0.01,
+                                    "percentage": 0.8,
                                     "shift_on_face":True}
 
-        self.graph_sampling_p_for_interpolation = 0.01
 
-        self.dynamic_loss_weights = True
+        self.standard_weights = {
+            "supervised": 1,
+            "continuity": 1,
+            "boundary": 1,
+        }
+
+        self.dynamic_loss_weights = False
         self.main_loss_component_dynamic = "supervised"
         self.lambda_dynamic_weights = 0.1 # NSFnets arXiv:2003.06496v1
         self.gamma_loss = 5
 
         self.logging = {
             "model_log_mode": "all",
-            "n_batches_freq": 100,
+            "n_batches_freq": 1,
             "log_graph": True,
         }
 
@@ -274,10 +283,11 @@ class Config():
             "flag_BC_PINN": self.flag_BC_PINN,
             "feat_dict": self.graph_node_feature_dict,
             "mask_dict": self.graph_node_feature_mask,
-            "use_positional_features": self.use_positional_features,
             "domain_sampling": self.domain_sampling,
             "boundary_sampling": self.boundary_sampling,
-            "graph_sampling_p_for_interpolation": self.graph_sampling_p_for_interpolation
+            "inference_mode_latent_sampled_points": self.inference_mode_latent_sampled_points,
+            "graph_sampling_p_for_interpolation": self.graph_sampling_p_for_interpolation,
+            "fourier_feat_dim": self.fourier_feat_dim,
         })
 
         return_dict = {

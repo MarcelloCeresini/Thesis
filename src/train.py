@@ -177,8 +177,9 @@ def train(
             loss = model.loss(pred, labels)
 
             if isinstance(loss, tuple):
-                loss_dict = loss[1]
-                loss = loss[0]
+                standard_loss = loss[0]
+                
+                loss_dict = {k:v*conf.standard_weights[k] for k,v in loss[1].items()}
                 
                 for k in loss_dict: 
                     total_loss_dict[k] = total_loss_dict.get(k, 0) + \
@@ -198,10 +199,19 @@ def train(
                     # TODO: could store grads and compute differences between them to avoid the last
                     # backward pass with the total loss (because we are summing them)
                     loss = sum(loss_dict[k]*loss_weights.get(k,1) for k in loss_dict)
-                    
+                else:
+                    loss = sum(loss_dict[k] for k in loss_dict)
             loss.backward()
             opt.step()
             batch.cpu()
+
+            if torch.isnan(loss):
+                print(loss_dict)
+
+            for name, param in model.named_parameters():
+                if param.grad is not None:
+                    if torch.isnan(param.grad).sum() > 0:
+                        print(f"NaN - {name}")
 
             total_loss += loss.item() * batch.num_graphs
 
@@ -210,6 +220,7 @@ def train(
 
         if WANDB_FLAG:
             log_dict = {
+                "standard_loss": standard_loss,
                 "train_loss": total_loss,
                 "lr": opt.param_groups[0]["lr"],
                 "epoch": epoch,

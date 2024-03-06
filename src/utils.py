@@ -1254,5 +1254,20 @@ def get_input_to_model(batch):
         "edge_attr": batch.edge_attr,
         "batch": batch.batch,
         "pos": batch.pos,
-        "CcFc_edges": torch.tensor(batch.CcFc_edges[0]), # TODO: change data to remove list
+        "triangulated_cells": batch.triangulated_cells,
     }
+
+
+def plot_continuity(pos: torch.Tensor, res: torch.Tensor):
+    points = np.stack([
+        pos[:,0].detach().cpu().numpy(), 
+        pos[:,1].detach().cpu().numpy(), 
+        res["continuity"].detach().cpu().numpy()]).T
+    
+    range_x = points[:,0].max() - points[:,0].min()
+    range_y = points[:,1].max() - points[:,1].min()
+    range_z = points[:,2].max() - points[:,2].min()
+
+    points[:,2] = points[:,2]/range_z*max(range_x, range_y)
+    pointcloud = pyvista.PolyData(points)
+    pointcloud.plot()
