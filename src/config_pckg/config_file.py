@@ -1,6 +1,7 @@
 from copy import deepcopy
 from enum import Enum
 import os
+import sys
 import pickle
 from typing import Annotated, Dict, Literal, Optional, TypedDict, Union
 import numpy as np
@@ -20,26 +21,32 @@ class Config():
         To change only some parameters between runs, we use a match case
         '''
         self.ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.DATA_DIR = os.path.join(self.ROOT_DIR, "data")
         self.PROJECT_NAME = os.path.basename(self.ROOT_DIR)
-        self.device: Literal["cpu", "cuda"] = "cuda"
 
-        ##### external folders
-        self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
-        self.EXTERNAL_FOLDER_MSH = os.path.join(self.EXTERNAL_FOLDER, "Mesh_ascii")
-        self.EXTERNAL_FOLDER_CSV = os.path.join(self.EXTERNAL_FOLDER, "CSV_ascii")
-        self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
-        self.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjsWithLabels_at300")
-        self.EXTERNAL_FOLDER_GRAPHS = os.path.join(self.EXTERNAL_FOLDER, "Graphs")
+        if "win" in sys.platform:
+            self.DATA_DIR = os.path.join(self.ROOT_DIR, "data")
+            self.device: Literal["cpu", "cuda"] = "cuda"
+
+            ##### external folders
+            self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
+            self.EXTERNAL_FOLDER_MSH = os.path.join(self.EXTERNAL_FOLDER, "Mesh_ascii")
+            self.EXTERNAL_FOLDER_CSV = os.path.join(self.EXTERNAL_FOLDER, "CSV_ascii")
+            self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
+            self.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjsWithLabels_at300")
+            self.EXTERNAL_FOLDER_GRAPHS = os.path.join(self.EXTERNAL_FOLDER, "Graphs")
         
+        elif "linux" in sys.platform:
+            self.DATA_DIR = "/public.hpc/marcello.ceresini"
+            self.device: Literal["cuda"] = "cuda"
+
+        else:
+            raise NotImplementedError(f"{sys.platform} is not supported yet")
+
         self.standard_datalist_path = os.path.join(self.DATA_DIR, "datalists.pt")
         self.test_imgs_comparisons = os.path.join(self.DATA_DIR, "test_imgs_comparisons")
         self.test_htmls_comparisons = os.path.join(self.DATA_DIR, "test_htmls_comparisons")
         self.test_vtksz_comparisons = os.path.join(self.DATA_DIR, "test_vtksz_comparisons")
         # self.standard_dataloader_path = os.path.join(self.DATA_DIR, "dataloaders.pt")
-
-        self.DATA_SERVER_PATH = "/public.hpc/marcello.ceresini"
-        self.server_datalist_path = os.path.join(self.DATA_SERVER_PATH, "datalists.pt")
 
         self.problematic_files = {"2dtc_002R074_001_s01"}
 
