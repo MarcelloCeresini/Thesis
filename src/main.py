@@ -100,11 +100,7 @@ if __name__ == "__main__":
             ### TENSORBOARD SETUP END ####
 
         print_w_time("GETTING DATALOADERS")
-        train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
-            conf, 
-            save_to_disk=False,
-            load_from_disk=True,
-        )
+        train_dataloader, val_dataloader, test_dataloader = get_data_loaders(conf, n_workers=0)
         print_memory_state_gpu("After DataLoaders", conf)
 
         print_w_time("BUILDING MODEL")
@@ -113,7 +109,7 @@ if __name__ == "__main__":
         print_memory_state_gpu("After Model.cuda()", conf)
 
         print_w_time("WRITING GRAPH SUMMARY")
-        for batch in train_dataloader:
+        for batch in val_dataloader:
             batch.to(conf.device)
             break
         # writer.add_graph(model, input_to_model=input_to_model, use_strict_trace=False)

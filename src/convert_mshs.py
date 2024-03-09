@@ -82,15 +82,17 @@ if __name__ == "__main__":
     graph_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, "*.pt")))
     
     for path_m, path_g in tqdm(zip(meshComplete_paths, graph_paths)):
-        assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
-        with open(path_m, "rb") as f:
-            obj = pickle.load(f)
+        # assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
+        # with open(path_m, "rb") as f:
+        #     meshCI = pickle.load(f)
 
         data = torch.load(path_g)
+        data.faces_in_cell = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] 
+                                for i in range(data.CcFc_edges[:,0].max()+1)]
 
-        triangulated_cells = get_triangulated_cells(obj.vertices_in_cells, obj.mesh.points)
-
-        data.triangulated_cells = torch.tensor(triangulated_cells)
+        # data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
+        # tmp1, tmp2 = meshCI.get_triangulated_cells()
+        # data.triangulated_cells, data.idx_of_triangulated_cell = torch.tensor(tmp1), torch.tensor(tmp2)
         torch.save(data, path_g)
 
 

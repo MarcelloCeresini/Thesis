@@ -53,7 +53,7 @@ def write_metric_results(metric_results, writer, epoch, split="val") -> None:
             writer.add_scalar(metric_name, metric_res_subdict, epoch)
 
 
-def test(loader: pyg_data.DataLoader, model, conf, loss_weights: Optional[dict]):
+def test(loader: pyg_data.DataLoader, model, conf, loss_weights: Optional[dict]=None):
     metric_dict = deepcopy(conf.metric_dict)
     metric_aero = conf.metric_aero
 
@@ -145,7 +145,7 @@ def train(
         optimizer=opt, 
         patience=conf.hyper_params["training"]["patience_reduce_lr"],
         min_lr=conf.hyper_params["training"]["min_lr"],
-        cooldown=conf.hyper_params["training"]["cooldown"]
+        cooldown=conf.hyper_params["training"]["cooldown"],
     )
 
     scheduler_for_training_end = lr_scheduler.ReduceLROnPlateau(
@@ -174,7 +174,7 @@ def train(
             pred = model(**get_input_to_model(batch))
             labels = clean_labels(batch, model.conf)
 
-            loss = model.loss(pred, labels)
+            loss = model.loss(pred, labels, batch)
 
             if isinstance(loss, tuple):
                 standard_loss = loss[0]

@@ -2,7 +2,7 @@
 name: EPD_with_sampling
 PINN: True
 add_self_loops: False
-update_edges: True
+update_edges: False
 edges_channels: 8
 use_positional_features: True
 

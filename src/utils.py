@@ -556,134 +556,6 @@ def get_forces(conf:Config, data:Data, pressure_values):
     return return_dict
 
 
-def convert_mesh_complete_info_obj_to_graph(
-        conf:Config,
-        meshCI, # MeshCompleteInfo object
-        complex_graph=False,
-        filename_output_graph=None, 
-        ):
-    
-    '''Given a MeshCompleteInfo instance, returns a graph and saves it to memory'''
-    if filename_output_graph == None:
-        print("Warning: no output location specified, graph will NOT be saved to disk")
-
-    if not complex_graph:
-        if conf.dim == 2:
-            graph_nodes_positions = meshCI.face_center_positions # not used because not relative
-
-            graph_node_attr = normalize_features(meshCI.face_center_features, conf)
-            graph_node_attr_mask = meshCI.face_center_features_mask
-            graph_node_additional_attr = meshCI.face_center_additional_features
-
-            FcFc_edges_bidir = np.concatenate([meshCI.FcFc_edges, np.flip(meshCI.FcFc_edges, axis=1)], axis=0)
-            graph_edges = FcFc_edges_bidir
-
-            graph_edge_relative_displacement_vector = np.array([graph_nodes_positions[p2]-graph_nodes_positions[p1] for (p1, p2) in graph_edges])
-            graph_edge_norm = np.expand_dims(np.linalg.norm(graph_edge_relative_displacement_vector, axis=1), axis=1)
-            graph_edge_attr = np.concatenate([graph_edge_relative_displacement_vector, graph_edge_norm], axis=1)
-
-            data = Data(
-                edge_index=torch.tensor(graph_edges).t().contiguous(), 
-                pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
-                edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
-                x=torch.tensor(graph_node_attr, dtype=torch.float32),
-                y=None
-            )
-            data.name = meshCI.name
-            data.meshComplete_corresponding_path = meshCI.path
-            
-            data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
-            data.x_additional = torch.Tensor(graph_node_additional_attr)
-
-            data.n_faces = torch.tensor(meshCI.face_center_positions.shape[0])
-            data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
-            face_label_dim = len(conf.features_to_keep)
-
-            tmp = normalize_labels(meshCI.face_center_labels, conf.label_normalization_mode, conf)
-            data.y = torch.tensor(tmp[conf.labels_to_keep_for_training].values, dtype=torch.float32)
-            # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
-
-            data.inward_normal_areas = torch.zeros((data.x.shape[0], 2))
-
-            surface_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_car"]].nonzero()[:,0]
-            data.inward_normal_areas[surface_faces, :] = get_inward_normal_areas(
-                faces_idxs=surface_faces,
-                face_areas=data.x[:, conf.graph_node_feature_dict["face_area"]],
-                faces_x_component=data.x[:, conf.graph_node_feature_dict["tangent_versor_x"]],
-                faces_y_component=data.x[:, conf.graph_node_feature_dict["tangent_versor_y"]],
-                CcFc_edges=meshCI.CcFc_edges,
-                cell_center_positions=meshCI.cell_center_positions,
-                face_center_positions=meshCI.face_center_positions,)
-
-            data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,-1])
-            data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
-
-        else:
-            raise NotImplementedError("Implement dim = 3")
-    else:
-        raise NotImplementedError("Still many things to do")
-        if conf.dim == 2:
-            graph_nodes_positions = np.concatenate([meshCI.cell_center_positions, meshCI.face_center_positions])
-
-            # shift face indices
-            FcFc_edges = meshCI.FcFc_edges
-            CcFc_edges = meshCI.CcFc_edges
-            CcCc_edges_bidir = meshCI.CcCc_edges_bidir
-            n_cells = meshCI.cell_center_positions.shape[0]
-            n_faces = meshCI.face_center_positions.shape[0]
-
-            FcFc_edges[:,:] += n_cells
-            CcFc_edges[:,1] += n_cells # first indices refer to cell centers and so do not need to be shifted
-
-            # Add graph_edge bidirectionality
-            FcFc_edges_bidir = np.concatenate([FcFc_edges, np.flip(FcFc_edges, axis=1)], axis=0)
-            CcFc_edges_bidir = np.concatenate([CcFc_edges, np.flip(CcFc_edges, axis=1)], axis=0)
-
-            graph_edges = np.concatenate([CcCc_edges_bidir, FcFc_edges_bidir, CcFc_edges_bidir])
-
-            graph_edge_attr = np.concatenate([np.ones((len(CcCc_edges_bidir), 1)) * conf.edge_type_feature["cell_cell"],
-                                            np.ones((len(FcFc_edges_bidir), 1)) * conf.edge_type_feature["face_face"],
-                                            np.ones((len(CcFc_edges_bidir), 1)) * conf.edge_type_feature["cell_face"]])
-
-            graph_node_attr = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
-                                            meshCI.face_center_features])
-
-            graph_node_attr_mask = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
-                                                meshCI.face_center_ord_features_mask])
-            data = Data(
-                edge_index=torch.tensor(graph_edges).t().contiguous(), 
-                pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
-                edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
-                x=torch.tensor(graph_node_attr, dtype=torch.float32),
-                y=None
-            )
-            
-            data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
-
-            data.n_cells = torch.tensor(n_cells)
-            data.n_faces = torch.tensor(n_faces)
-
-            data.n_cell_edges = torch.tensor(len(CcCc_edges_bidir))
-            data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
-            data.n_cell_face_edges = torch.tensor(len(CcFc_edges_bidir))
-
-            face_label_dim = len(conf.features_to_keep)
-
-            data.y = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
-                                        meshCI.face_center_labels]), dtype=torch.float32)
-    
-            data.y_mask = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
-                                                    np.ones([n_faces, face_label_dim])]), dtype=torch.bool)
-            
-        else:
-            raise NotImplementedError("Implement dim = 3")
-
-
-    if filename_output_graph:
-        torch.save(data, filename_output_graph)
-
-    return data
-
 class MeshCompleteInfo:
     def __init__(
             self,
@@ -923,6 +795,32 @@ class MeshCompleteInfo:
             print("WARNING, no inlet points found")
         
         return face_center_attr_BC, face_center_attr_BC_mask, face_center_additional_attrs, inlet_points
+
+    def get_triangulated_cells(self):
+        vertices_in_cells, pos, CcFc_edges = self.vertices_in_cells, self.mesh.points, self.CcFc_edges
+
+        # faces_in_cells = []
+        # for i in range(len(vertices_in_cells)): # n_cells
+        #     faces_in_cells.append(CcFc_edges[CcFc_edges[:,0]==i,1])
+
+        all_triangles = []
+        cell_idxs = []
+        # faces_enclosing_triangles = []
+
+        for i, vertices in enumerate(vertices_in_cells):
+            if len(vertices) > 3:
+                tri = Delaunay(pos[vertices, :2], qhull_options="QJ")
+
+                for simplex in tri.simplices:
+                    all_triangles.append(tri.points[simplex])
+                    cell_idxs.append(i)
+                    # faces_enclosing_triangles.append(faces)
+            else:
+                all_triangles.append(pos[vertices, :2])
+                cell_idxs.append(i)
+                # faces_enclosing_triangles.append(faces)
+        
+        return np.stack(all_triangles), np.stack(cell_idxs)
 
 
     def update_path(self, path):
@@ -1254,7 +1152,9 @@ def get_input_to_model(batch):
         "edge_attr": batch.edge_attr,
         "batch": batch.batch,
         "pos": batch.pos,
-        "triangulated_cells": batch.triangulated_cells,
+        "domain_sampling_points": getattr(batch, "domain_sampling_points", None),
+        "boundary_sampling_points": getattr(batch, "boundary_sampling_points", None),
+        "idxs_boundary_sampled": getattr(batch, "idxs_boundary_sampled", None),
     }
 
 
@@ -1271,3 +1171,138 @@ def plot_continuity(pos: torch.Tensor, res: torch.Tensor):
     points[:,2] = points[:,2]/range_z*max(range_x, range_y)
     pointcloud = pyvista.PolyData(points)
     pointcloud.plot()
+
+
+
+def convert_mesh_complete_info_obj_to_graph(
+        conf:Config,
+        meshCI: MeshCompleteInfo, # MeshCompleteInfo object
+        complex_graph=False,
+        filename_output_graph=None, 
+        ):
+    
+    '''Given a MeshCompleteInfo instance, returns a graph and saves it to memory'''
+    if filename_output_graph == None:
+        print("Warning: no output location specified, graph will NOT be saved to disk")
+
+    if not complex_graph:
+        if conf.dim == 2:
+            graph_nodes_positions = meshCI.face_center_positions # not used because not relative
+
+            graph_node_attr = normalize_features(meshCI.face_center_features, conf)
+            graph_node_attr_mask = meshCI.face_center_features_mask
+            graph_node_additional_attr = meshCI.face_center_additional_features
+
+            FcFc_edges_bidir = np.concatenate([meshCI.FcFc_edges, np.flip(meshCI.FcFc_edges, axis=1)], axis=0)
+            graph_edges = FcFc_edges_bidir
+
+            graph_edge_relative_displacement_vector = np.array([graph_nodes_positions[p2]-graph_nodes_positions[p1] for (p1, p2) in graph_edges])
+            graph_edge_norm = np.expand_dims(np.linalg.norm(graph_edge_relative_displacement_vector, axis=1), axis=1)
+            graph_edge_attr = np.concatenate([graph_edge_relative_displacement_vector, graph_edge_norm], axis=1)
+
+            data = Data(
+                edge_index=torch.tensor(graph_edges).t().contiguous(), 
+                pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
+                edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
+                x=torch.tensor(graph_node_attr, dtype=torch.float32),
+                y=None
+            )
+            data.name = meshCI.name
+            data.meshComplete_corresponding_path = meshCI.path
+            
+            data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
+            data.x_additional = torch.Tensor(graph_node_additional_attr)
+
+            data.n_faces = torch.tensor(meshCI.face_center_positions.shape[0])
+            data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
+            face_label_dim = len(conf.features_to_keep)
+
+            tmp = normalize_labels(meshCI.face_center_labels, conf.label_normalization_mode, conf)
+            data.y = torch.tensor(tmp[conf.labels_to_keep_for_training].values, dtype=torch.float32)
+            # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
+
+            data.inward_normal_areas = torch.zeros((data.x.shape[0], 2))
+
+            surface_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_car"]].nonzero()[:,0]
+            data.inward_normal_areas[surface_faces, :] = get_inward_normal_areas(
+                faces_idxs=surface_faces,
+                face_areas=data.x[:, conf.graph_node_feature_dict["face_area"]],
+                faces_x_component=data.x[:, conf.graph_node_feature_dict["tangent_versor_x"]],
+                faces_y_component=data.x[:, conf.graph_node_feature_dict["tangent_versor_y"]],
+                CcFc_edges=meshCI.CcFc_edges,
+                cell_center_positions=meshCI.cell_center_positions,
+                face_center_positions=meshCI.face_center_positions,)
+
+            data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,-1])
+            data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
+            tmp1, tmp2 = \
+                meshCI.get_triangulated_cells(meshCI.vertices_in_cells, meshCI.mesh.points, meshCI.faces_in_cells)
+
+            data.triangulated_cells, data.idx_of_triangulated_cell = torch.tensor(tmp1), torch.tensor(tmp2)
+            data.faces_in_cell = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
+
+        else:
+            raise NotImplementedError("Implement dim = 3")
+    else:
+        raise NotImplementedError("Still many things to do")
+        if conf.dim == 2:
+            graph_nodes_positions = np.concatenate([meshCI.cell_center_positions, meshCI.face_center_positions])
+
+            # shift face indices
+            FcFc_edges = meshCI.FcFc_edges
+            CcFc_edges = meshCI.CcFc_edges
+            CcCc_edges_bidir = meshCI.CcCc_edges_bidir
+            n_cells = meshCI.cell_center_positions.shape[0]
+            n_faces = meshCI.face_center_positions.shape[0]
+
+            FcFc_edges[:,:] += n_cells
+            CcFc_edges[:,1] += n_cells # first indices refer to cell centers and so do not need to be shifted
+
+            # Add graph_edge bidirectionality
+            FcFc_edges_bidir = np.concatenate([FcFc_edges, np.flip(FcFc_edges, axis=1)], axis=0)
+            CcFc_edges_bidir = np.concatenate([CcFc_edges, np.flip(CcFc_edges, axis=1)], axis=0)
+
+            graph_edges = np.concatenate([CcCc_edges_bidir, FcFc_edges_bidir, CcFc_edges_bidir])
+
+            graph_edge_attr = np.concatenate([np.ones((len(CcCc_edges_bidir), 1)) * conf.edge_type_feature["cell_cell"],
+                                            np.ones((len(FcFc_edges_bidir), 1)) * conf.edge_type_feature["face_face"],
+                                            np.ones((len(CcFc_edges_bidir), 1)) * conf.edge_type_feature["cell_face"]])
+
+            graph_node_attr = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
+                                            meshCI.face_center_features])
+
+            graph_node_attr_mask = np.concatenate([np.zeros([n_cells, len(conf.graph_node_feature_dict)]),
+                                                meshCI.face_center_ord_features_mask])
+            data = Data(
+                edge_index=torch.tensor(graph_edges).t().contiguous(), 
+                pos=torch.tensor(graph_nodes_positions, dtype=torch.float32),
+                edge_attr=torch.tensor(graph_edge_attr, dtype=torch.float32),
+                x=torch.tensor(graph_node_attr, dtype=torch.float32),
+                y=None
+            )
+            
+            data.x_mask = torch.tensor(graph_node_attr_mask, dtype=torch.bool)
+
+            data.n_cells = torch.tensor(n_cells)
+            data.n_faces = torch.tensor(n_faces)
+
+            data.n_cell_edges = torch.tensor(len(CcCc_edges_bidir))
+            data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
+            data.n_cell_face_edges = torch.tensor(len(CcFc_edges_bidir))
+
+            face_label_dim = len(conf.features_to_keep)
+
+            data.y = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
+                                        meshCI.face_center_labels]), dtype=torch.float32)
+    
+            data.y_mask = torch.tensor(np.concatenate([np.zeros([n_cells, face_label_dim]), 
+                                                    np.ones([n_faces, face_label_dim])]), dtype=torch.bool)
+            
+        else:
+            raise NotImplementedError("Implement dim = 3")
+
+
+    if filename_output_graph:
+        torch.save(data, filename_output_graph)
+
+    return data

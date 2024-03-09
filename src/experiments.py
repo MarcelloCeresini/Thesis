@@ -19,7 +19,7 @@ import matplotlib.pyplot as plt
 
 import utils
 from config_pckg.config_file import Config
-from data_pipeline.data_loading import get_data_loaders
+from data_pipeline.data_loading import get_data_loaders, CfdDataset
 from utils import convert_mesh_complete_info_obj_to_graph, plot_gt_pred_label_comparison, get_input_to_model
 from models.models import get_model_instance, PINN
 
@@ -57,11 +57,8 @@ if __name__ == "__main__":
     conf = Config()
 
     print("Getting dataloaders")
-    train_dataloader, val_dataloader, test_dataloader = get_data_loaders(
-            conf, 
-            save_to_disk=False,
-            load_from_disk=True,
-        )
+    train_dataloader, val_dataloader, test_dataloader = \
+        get_data_loaders(conf, n_workers=0)
     print("done")
 
     ####### print results of last training
@@ -98,7 +95,7 @@ if __name__ == "__main__":
     # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
     y = model(**get_input_to_model(batch))
     # plt.show()
-    loss = model.loss(y, batch.y)
+    loss = model.loss(y, batch.y, batch)
     loss[0].backward()
     opt.step()
     model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model

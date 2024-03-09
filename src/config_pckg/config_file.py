@@ -42,7 +42,7 @@ class Config():
         else:
             raise NotImplementedError(f"{sys.platform} is not supported yet")
 
-        self.standard_datalist_path = os.path.join(self.DATA_DIR, "datalists.pt")
+        self.standard_dataset_dir = os.path.join(self.DATA_DIR, "dataset_files")
         self.test_imgs_comparisons = os.path.join(self.DATA_DIR, "test_imgs_comparisons")
         self.test_htmls_comparisons = os.path.join(self.DATA_DIR, "test_htmls_comparisons")
         self.test_vtksz_comparisons = os.path.join(self.DATA_DIR, "test_vtksz_comparisons")
@@ -241,9 +241,9 @@ class Config():
         self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)+self.n_radial_attributes
         self.output_dim = len(self.labels_to_keep_for_training)
 
-        self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar"] = \
-            "continuity_only"
-        self.flag_BC_PINN: bool = False
+        self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar"] \
+                                = "continuity_only"
+        self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder"] = \
             "fourier_features"
         self.graph_sampling_p_for_interpolation = 0.01
@@ -252,7 +252,8 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.8}
+                                    "percentage": 0.5,
+                                    "add_edges": True}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "percentage_of_boundary"
@@ -265,6 +266,7 @@ class Config():
             "supervised": 1,
             "continuity": 1,
             "boundary": 1,
+            "supervised_on_sampled": 1,
         }
 
         self.dynamic_loss_weights = False
