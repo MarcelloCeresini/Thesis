@@ -243,16 +243,16 @@ class Config():
 
         self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar"] \
                                 = "continuity_only"
-        self.flag_BC_PINN: bool = True
-        self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder"] = \
-            "fourier_features"
+        self.flag_BC_PINN: bool = False
+        self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] = \
+            "new_edges"
         self.graph_sampling_p_for_interpolation = 0.01
-        self.fourier_feat_dim = 32
+        self.fourier_feat_dim = 64
 
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.5,
+                                    "percentage": 0.3,
                                     "add_edges": True}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
@@ -270,7 +270,8 @@ class Config():
         }
 
         self.dynamic_loss_weights = False
-        self.main_loss_component_dynamic = "supervised"
+        # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"
+        self.main_loss_component_dynamic = "supervised_on_sampled"
         self.lambda_dynamic_weights = 0.1 # NSFnets arXiv:2003.06496v1
         self.gamma_loss = 5
 

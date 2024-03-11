@@ -1155,6 +1155,7 @@ def get_input_to_model(batch):
         "domain_sampling_points": getattr(batch, "domain_sampling_points", None),
         "boundary_sampling_points": getattr(batch, "boundary_sampling_points", None),
         "idxs_boundary_sampled": getattr(batch, "idxs_boundary_sampled", None),
+        "new_edges_not_shifted": getattr(batch, "new_edges_not_shifted", None),
     }
 
 
@@ -1239,7 +1240,11 @@ def convert_mesh_complete_info_obj_to_graph(
                 meshCI.get_triangulated_cells(meshCI.vertices_in_cells, meshCI.mesh.points, meshCI.faces_in_cells)
 
             data.triangulated_cells, data.idx_of_triangulated_cell = torch.tensor(tmp1), torch.tensor(tmp2)
-            data.faces_in_cell = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
+            data.faces_in_cell = torch.nn.utils.rnn.pad_sequence(
+                [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)], 
+                padding_value=-1
+            )
+            data.len_faces = torch.tensor([len(f) for f in data.faces_in_cell])
 
         else:
             raise NotImplementedError("Implement dim = 3")

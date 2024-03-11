@@ -25,7 +25,6 @@ class CfdDataset(InMemoryDataset):
 
     def get(self, idx: int) -> BaseData:
         data_filenames = np.array(sorted(glob.glob(pathname="*.pt", root_dir=self.root)))[self.split_idxs]
-        print(f"idx - {idx} - {data_filenames[idx]}")
         return torch.load(os.path.join(self.root, data_filenames[idx]))
 
 
@@ -42,14 +41,15 @@ def get_data_loaders(conf: Config, n_workers: Optional[int] = 4):
     transforms = pyg_t.Compose(transform_list)
 
     dataset_train = CfdDataset(conf.split_idxs["train"], root=conf.standard_dataset_dir, transform=transforms)
-    dataset_val = CfdDataset(conf.split_idxs["val"], root=conf.standard_dataset_dir)
-    dataset_test = CfdDataset(conf.split_idxs["test"], root=conf.standard_dataset_dir)
+    dataset_val = CfdDataset(conf.split_idxs["val"], root=conf.standard_dataset_dir, transform=transforms)
+    dataset_test = CfdDataset(conf.split_idxs["test"], root=conf.standard_dataset_dir, transform=transforms)
 
     train_dataloader = DataLoader(dataset_train, 
                             batch_size=conf.hyper_params["training"]["batch_size"],
                             shuffle=True, 
                             num_workers=n_workers, 
-                            # persistent_workers=True if n_workers>0 else False,
+                            persistent_workers=n_workers>0,
+                            pin_memory=True
                             )
     val_dataloader  = DataLoader(dataset_val,
                             batch_size=1)

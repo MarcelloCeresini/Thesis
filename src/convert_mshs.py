@@ -87,14 +87,17 @@ if __name__ == "__main__":
         #     meshCI = pickle.load(f)
 
         data = torch.load(path_g)
-        data.faces_in_cell = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] 
-                                for i in range(data.CcFc_edges[:,0].max()+1)]
+        # data.len_faces = torch.tensor([len(f) for f in data.faces_in_cell])
+        data.faces_in_cell = torch.nn.utils.rnn.pad_sequence(
+            data.faces_in_cell, padding_value=-1
+        )
 
         # data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
         # tmp1, tmp2 = meshCI.get_triangulated_cells()
         # data.triangulated_cells, data.idx_of_triangulated_cell = torch.tensor(tmp1), torch.tensor(tmp2)
         torch.save(data, path_g)
 
+    print("REMEMBER TO COPY IT TO THE PC FOLDER")
 
 
 def initial_trial():

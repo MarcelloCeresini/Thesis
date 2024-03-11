@@ -100,7 +100,8 @@ if __name__ == "__main__":
             ### TENSORBOARD SETUP END ####
 
         print_w_time("GETTING DATALOADERS")
-        train_dataloader, val_dataloader, test_dataloader = get_data_loaders(conf, n_workers=0)
+        train_dataloader, val_dataloader, test_dataloader = \
+            get_data_loaders(conf, n_workers=0)
         print_memory_state_gpu("After DataLoaders", conf)
 
         print_w_time("BUILDING MODEL")

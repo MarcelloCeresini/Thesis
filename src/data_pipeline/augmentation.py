@@ -37,36 +37,38 @@ class SampleDomainPoints(BaseTransform):
                 idxs_domain_sampled = \
                     torch.multinomial(idxs_isnt_BC.to(torch.float), 
                                         num_samples, 
-                                        replacement = False if p<1 else True) # as np.random.choice
+                                        replacement = p>=1) # as np.random.choice
                 domain_sampling_points = data.pos[idxs_domain_sampled]
             case "uniformly_cells":
                 assert data.triangulated_cells is not None, "Cannot sample from cells if triangulated_cells is not provided"
                 p = self.domain_sampling["percentage"]
                 num_samples = int(p * data.triangulated_cells.shape[0])
-                idxs_domain_sampled_cells = \
+                idxs_domain_sampled_triangs = \
                     torch.multinomial(torch.ones(data.triangulated_cells.shape[0], dtype=torch.float), 
                                         num_samples, 
-                                        replacement = False if p<1 else True) # as np.random.choice
+                                        replacement = p>=1) # as np.random.choice
 
                 domain_sampling_points = vmap(self.get_random_position_in_simplex, randomness="different") \
-                    (data.triangulated_cells[idxs_domain_sampled_cells,...].to(torch.float32))
+                    (data.triangulated_cells[idxs_domain_sampled_triangs,...].to(torch.float32))
                 
                 if self.domain_sampling["add_edges"]:
-                    # print("inside adding_edges")
-                    tmp_triang = data.idx_of_triangulated_cell
-                    tmp_faces = data.faces_in_cell
+                    idxs_domain_sampled_cells = data.idx_of_triangulated_cell[idxs_domain_sampled_triangs]
+                    sampled_faces_len = data.len_faces[idxs_domain_sampled_cells]
+
+                    sampled_padded_faces = data.faces_in_cell[:, idxs_domain_sampled_cells]
+                    mask = sampled_padded_faces != -1
+
+                    idxs_tensor = torch.arange(
+                        idxs_domain_sampled_triangs.shape[0]).repeat_interleave(sampled_faces_len, dim=0)
+                    
                     # only from existing faces to these new points, not vice-versa
                     # message passing only goes to new places for prediction
-                    faces = [tmp_faces[tmp_triang[i]] for i in idxs_domain_sampled_cells]
-                    # print("after faces")
-                    idxs = [i.repeat(faces.shape[0]) for i, faces in zip(torch.arange(len(faces)), faces)]
-                    # print("after idxs")
-                    faces_tensor = torch.cat(faces, dim=0)
-                    # print("after faces_tensor")
-                    idxs_tensor = torch.cat(idxs, dim=0)
-                    # print("after idxs_tensor")
-                    data.new_edges_not_shifted = torch.stack((idxs_tensor, faces_tensor))
-                    # print("finished adding_edges")
+                    data.new_edges_not_shifted = torch.stack((idxs_tensor, sampled_padded_faces[mask]))
+
+                    dist = vmap(lambda x, y: torch.cat((y-x, torch.linalg.norm(y-x, keepdim=True))))(
+                        domain_sampling_points[idxs_tensor], data.pos[sampled_padded_faces[mask], :2]
+                    )
+                    data.new_edge_attributes = dist
             case _:
                 raise NotImplementedError()
         data.domain_sampling_points = domain_sampling_points

@@ -68,7 +68,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: Optional[dict]=
             batch.to(device)
             pred = model(**get_input_to_model(batch))
             labels = clean_labels(batch, model.conf)
-            loss = model.loss(pred, labels)
+            loss = model.loss(pred, labels, data=batch)
 
             if isinstance(loss, tuple):
                 loss_dict = loss[1]
@@ -243,7 +243,7 @@ def train(
         # torch.cuda.empty_cache()
         if epoch % conf.hyper_params["val"]["n_epochs_val"] == 0:
             val_loss, metric_results = test(val_loader, model, conf, loss_weights)
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
 
             if val_loss < best_loss:
                 best_loss = val_loss
