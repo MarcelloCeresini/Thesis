@@ -32,7 +32,7 @@ if __name__ == "__main__":
         conf = Config()
         full_conf = conf.get_logging_info()
         torch.cuda.empty_cache()
-
+        torch.autograd.set_detect_anomaly(True, True)
         ###################
         # full_conf["model"]["message_passer"]["repeats_training"] = msg_passing_steps
         ###################

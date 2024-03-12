@@ -640,8 +640,8 @@ class PINN(nn.Module):
                     sampling_points, new_edges, 
             )
             
-            if (tmp := torch.isnan(hess_samp).sum()) > 0:
-                print(f"hess_samp - {tmp} NaNs")
+            # if (tmp := torch.isnan(hess_samp).sum()) > 0:
+            #     print(f"hess_samp - {tmp} NaNs")
             if (tmp := torch.isnan(grads_samp).sum()) > 0:
                 print(f"grads_samp - {tmp} NaNs")
             if (tmp := torch.isnan(out_samp).sum()) > 0:
