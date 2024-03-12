@@ -252,7 +252,7 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.3}
+                                    "percentage": 0.5}
         self.n_sampled_new_edges = 3
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
@@ -265,7 +265,7 @@ class Config():
 
         self.standard_weights = {
             "supervised": 1,
-            "continuity": 1,
+            "continuity": 10,
             "boundary": 1,
             "supervised_on_sampled": 1,
         }

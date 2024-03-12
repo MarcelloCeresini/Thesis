@@ -216,6 +216,7 @@ def train(
                 if param.grad is not None:
                     if torch.isnan(param.grad).sum() > 0:
                         print(f"NaN - {name}")
+                        input("Press something to go onwards")
 
             total_loss += loss.item() * batch.num_graphs
 

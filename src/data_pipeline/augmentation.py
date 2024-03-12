@@ -48,8 +48,20 @@ class SampleDomainPoints(BaseTransform):
                                         num_samples, 
                                         replacement = p>=1) # as np.random.choice
 
-                domain_sampling_points = vmap(self.get_random_position_in_simplex, randomness="different") \
+
+                counter_resampling = 0
+                while counter_resampling < 100:
+                    domain_sampling_points = vmap(self.get_random_position_in_simplex, randomness="different") \
                     (data.triangulated_cells[idxs_domain_sampled_triangs,...].to(torch.float32))
+                
+                    if domain_sampling_points.isnan().sum() == 0:
+                        break
+                    else:
+                        counter_resampling += 1
+                        print(f"NANS in domain sampling, resampling. Counter at {counter_resampling}")
+                    
+                if domain_sampling_points.isnan().sum() > 0:
+                    raise ValueError("NANS in domain sampling") 
                 
                 if self.general_sampling["add_edges"]:
                     ### FOR TRAINING
