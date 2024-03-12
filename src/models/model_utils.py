@@ -178,16 +178,16 @@ def get_obj_from_structure(
             raise NotImplementedError()
 
 
-def forward_for_general_layer(layer, X_dict):
+def forward_for_general_layer(layer, X_dict: dict):
     match layer:
         case Simple_MLPConv():
             return layer(
                 x=          X_dict["x"], 
                 edge_index= X_dict["edge_index"], 
                 edge_attr=  X_dict["edge_attr"],
-                x_graph=    X_dict["x_graph"],
-                x_BC=       X_dict["x_BC"],
-                batch=      X_dict["batch"],
+                x_graph=    X_dict.get("x_graph", None),
+                x_BC=       X_dict.get("x_BC", None),
+                batch=      X_dict.get("batch", None),
             )
         case MLPConv():
             x = layer(

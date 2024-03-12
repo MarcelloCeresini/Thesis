@@ -60,28 +60,16 @@ message_passer:
       - {type: layer, name: Linear, out_features: 8}
       - {type: layer, name: Softplus}
 
-final_message_passer:
-  type: repeated_shared_layer
-  name: Simple_MLPConv # [NNConv, GCNConv, MLPConv, Simple_MLPConv_edges]
-  out_channels: 32 # also in_channels are the same, to be able to call multiple times
-  attention: False
-  add_global_info: False
-  add_BC_info: False
-  skip: False
-  update_edges: False
+new_edges_mlp:
+  add_global_info: True
+  add_BC_info: True
   standard_activation: Softplus
-  aggr: mean
-  nn: # takes as input edge_features (and does NOT update them, always gets edge features)
+  msg_mlp:
     type: sequential_model
     layers: 
-      - {type: layer, name: Linear, out_features: 32}
-      - {type: layer, name: Softplus}
-      # Last (Linear) layer for internal_mlp is always added autonomously
-  nn_update:
+  update_mlp:
     type: sequential_model
-    layers: 
-      - {type: layer, name: Linear, out_features: 32}
-      - {type: layer, name: Softplus}
+    layers:
 
 decoder:
   type: sequential_model

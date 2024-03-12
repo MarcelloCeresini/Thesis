@@ -243,7 +243,7 @@ class Config():
 
         self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar"] \
                                 = "continuity_only"
-        self.flag_BC_PINN: bool = False
+        self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] = \
             "new_edges"
         self.graph_sampling_p_for_interpolation = 0.01
@@ -252,8 +252,8 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.3,
-                                    "add_edges": True}
+                                    "percentage": 0.3}
+        self.n_sampled_new_edges = 3
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "percentage_of_boundary"
@@ -261,6 +261,7 @@ class Config():
                                     "percentage": 0.8,
                                     "shift_on_face":True}
 
+        self.general_sampling = {"add_edges": True,}
 
         self.standard_weights = {
             "supervised": 1,
@@ -297,9 +298,11 @@ class Config():
             "mask_dict": self.graph_node_feature_mask,
             "domain_sampling": self.domain_sampling,
             "boundary_sampling": self.boundary_sampling,
+            "general_sampling": self.general_sampling,
             "inference_mode_latent_sampled_points": self.inference_mode_latent_sampled_points,
             "graph_sampling_p_for_interpolation": self.graph_sampling_p_for_interpolation,
             "fourier_feat_dim": self.fourier_feat_dim,
+            "n_sampled_new_edges": self.n_sampled_new_edges,
         })
 
         return_dict = {

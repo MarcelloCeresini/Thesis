@@ -9,7 +9,7 @@ class SampleDomainPoints(BaseTransform):
         super().__init__()
         self.full_conf = full_conf
         self.domain_sampling = self.full_conf["hyperparams"]["domain_sampling"]
-
+        self.general_sampling = self.full_conf["hyperparams"]["general_sampling"]
 
     def get_random_position_in_simplex(self, spatial_positions):
         '''Uniform sampling inside simplex --> each coordinate is the linear combination of
@@ -51,24 +51,56 @@ class SampleDomainPoints(BaseTransform):
                 domain_sampling_points = vmap(self.get_random_position_in_simplex, randomness="different") \
                     (data.triangulated_cells[idxs_domain_sampled_triangs,...].to(torch.float32))
                 
-                if self.domain_sampling["add_edges"]:
+                if self.general_sampling["add_edges"]:
+                    ### FOR TRAINING
                     idxs_domain_sampled_cells = data.idx_of_triangulated_cell[idxs_domain_sampled_triangs]
-                    sampled_faces_len = data.len_faces[idxs_domain_sampled_cells]
 
                     sampled_padded_faces = data.faces_in_cell[:, idxs_domain_sampled_cells]
                     mask = sampled_padded_faces != -1
 
+                    k_sampled_faces_idxs = torch.multinomial(
+                        mask.to(torch.float32).T, 
+                        num_samples=self.full_conf["hyperparams"]["n_sampled_new_edges"], 
+                        replacement=self.full_conf["hyperparams"]["n_sampled_new_edges"]>3)
+
+                    k_sampled_faces = torch.gather(sampled_padded_faces.T, dim=1, index=k_sampled_faces_idxs)
+
+                    # import matplotlib.pyplot as plt
+                    # for i in range(num_samples):
+                    #     # a = data.pos[data.faces_in_cell[:, idxs_domain_sampled_cells[i]]]
+                    #     a = data.pos[k_sampled_faces[i,:]]
+                    #     b = domain_sampling_points[i]
+                    #     plt.scatter(a[:,0], a[:,1], c="b")
+                    #     plt.scatter(b[0], b[1], c="y")
+                    #     plt.show()
+
+                    data.new_edges = k_sampled_faces
+                    # data.new_edge_attributes = vmap(lambda x, y: torch.cat((y-x, torch.linalg.norm(y-x, dim=1, keepdim=True)), dim=1))(
+                    #     domain_sampling_points, data.pos[k_sampled_faces, :2]
+                    # )
+
+                    ### FOR LOSS
+                    sampled_faces_len = data.len_faces[idxs_domain_sampled_cells]
                     idxs_tensor = torch.arange(
                         idxs_domain_sampled_triangs.shape[0]).repeat_interleave(sampled_faces_len, dim=0)
-                    
+
                     # only from existing faces to these new points, not vice-versa
                     # message passing only goes to new places for prediction
-                    data.new_edges_not_shifted = torch.stack((idxs_tensor, sampled_padded_faces[mask]))
-
-                    dist = vmap(lambda x, y: torch.cat((y-x, torch.linalg.norm(y-x, keepdim=True))))(
-                        domain_sampling_points[idxs_tensor], data.pos[sampled_padded_faces[mask], :2]
+                    sampled_faces = sampled_padded_faces.T[mask.T]
+                    data.new_edges_not_shifted = torch.stack((idxs_tensor, sampled_faces))
+                    data.new_edges_weights = vmap(lambda x, y: 1/torch.linalg.norm(y-x)**2)(
+                        domain_sampling_points[idxs_tensor], data.pos[sampled_faces][:,:2]
                     )
-                    data.new_edge_attributes = dist
+
+                    # import matplotlib.pyplot as plt
+                    # for i in range(num_samples):
+                    #     # a = data.pos[data.faces_in_cell[:, idxs_domain_sampled_cells[i]]]
+                    #     mask = idxs_tensor == i
+                    #     a = data.pos[sampled_faces[mask]]
+                    #     b = domain_sampling_points[i]
+                    #     plt.scatter(a[:,0], a[:,1], c="b")
+                    #     plt.scatter(b[0], b[1], c="y")
+                    #     plt.show()
             case _:
                 raise NotImplementedError()
         data.domain_sampling_points = domain_sampling_points

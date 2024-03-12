@@ -25,8 +25,10 @@ from models.models import get_model_instance, PINN
 
 
 def get_training_data(run_name, conf, from_checkpoints:bool):
-    with open(os.path.join(conf.ROOT_DIR, "log", run_name, "model_conf.pkl"), "rb") as f:
-        model_conf = pickle.load(f)
+    with open(os.path.join(conf.DATA_DIR, "model_runs", run_name+"_full_conf.pkl"), "rb") as f:
+        model_conf = torch.load(f)
+
+    # model_conf["hyperparams"]["general_sampling"] = {"add_edges":True}
     model = get_model_instance(model_conf)
 
     if not from_checkpoints:
@@ -41,7 +43,6 @@ def get_training_data(run_name, conf, from_checkpoints:bool):
     return model, model_conf
 
 
-
 def get_last_training(conf, from_checkpoints: bool =False):
     if not from_checkpoints:
         dirlist = sorted(os.listdir(os.path.join(conf.DATA_DIR, "model_runs")))
@@ -53,6 +54,23 @@ def get_last_training(conf, from_checkpoints: bool =False):
     return model, model_conf, run_name
 
 
+def plot_test_images_from_last_run(conf, test_dataloader):
+
+    model, model_conf, run_name = get_last_training(conf, from_checkpoints=True)
+
+    for batch in tqdm(test_dataloader):
+        pred_batch = model(**get_input_to_model(batch))
+
+        if isinstance(pred_batch, tuple):
+            residuals = pred_batch[1]
+            pred_batch = pred_batch[0]
+
+        for i in range(len(batch)):
+            data = batch[i]
+            pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
+            plot_gt_pred_label_comparison(data, pred.detach().numpy(), conf, run_name=run_name)
+
+
 if __name__ == "__main__":
     conf = Config()
 
@@ -62,41 +80,32 @@ if __name__ == "__main__":
     print("done")
 
     ####### print results of last training
-    # model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
-    # model.cpu()
-    # print(f"Last training: {run_name}")
+    plot_test_images_from_last_run(conf, test_dataloader)
 
-    # for batch in tqdm(test_dataloader):
-    #     pred_batch = model(**get_input_to_model(batch))
-    #     for i in range(len(batch)):
-    #         with torch.no_grad():
-    #             data = batch[i]
-    #             pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
-    #             plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)
 
     ######## try if the model works
-    model_conf = conf.get_logging_info()
-    model = get_model_instance(model_conf) # build model
+    # model_conf = conf.get_logging_info()
+    # model = get_model_instance(model_conf) # build model
 
-    conf.device = "cpu"
+    # conf.device = "cpu"
 
-    model.to(conf.device)
+    # model.to(conf.device)
 
-    opt = Adam(
-        params = model.parameters(),
-        lr = conf.hyper_params["training"]["lr"],
-        weight_decay = conf.hyper_params["training"]["weight_decay"],
-    )
-    opt.zero_grad(set_to_none=True)
+    # opt = Adam(
+    #     params = model.parameters(),
+    #     lr = conf.hyper_params["training"]["lr"],
+    #     weight_decay = conf.hyper_params["training"]["weight_decay"],
+    # )
+    # opt.zero_grad(set_to_none=True)
 
-    for batch in train_dataloader:
-        batch.to(conf.device)
-        break
-    # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
-    y = model(**get_input_to_model(batch))
-    # plt.show()
-    loss = model.loss(y, batch.y, batch)
-    loss[0].backward()
-    opt.step()
-    model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
-    print(model_summary)
+    # for batch in train_dataloader:
+    #     batch.to(conf.device)
+    #     break
+    # # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
+    # y = model(**get_input_to_model(batch))
+    # # plt.show()
+    # loss = model.loss(y, batch.y, batch)
+    # loss[0].backward()
+    # opt.step()
+    # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
+    # print(model_summary)

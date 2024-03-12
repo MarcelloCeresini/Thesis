@@ -35,7 +35,7 @@ def get_data_loaders(conf: Config, n_workers: Optional[int] = 4):
     transform_list = []
     if conf.flag_BC_PINN:
         transform_list.append(SampleBoundaryPoints(full_conf))
-    if conf.PINN_mode != "supervised_only":
+    if conf.PINN_mode != "supervised_only" or conf.domain_sampling["add_edges"]:
         transform_list.append(SampleDomainPoints(full_conf))
 
     transforms = pyg_t.Compose(transform_list)

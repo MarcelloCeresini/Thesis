@@ -11,7 +11,7 @@ import torch_geometric.data as pyg_data
 import torch_geometric.utils as pyg_utils
 import torch_geometric.transforms as T
 
-from torch.nn import Linear, ReLU
+from torch.nn import Linear, ReLU, Softplus
 from torch_geometric.nn import GCNConv
 from torch_scatter import scatter_mean
 from torch.func import functional_call, vmap, jacrev, hessian
@@ -24,6 +24,38 @@ from config_pckg.config_file import Config
 from loss_pckg.losses import MSE_loss
 from .model_utils import get_obj_from_structure, forward_for_general_layer
 from .layers import Simple_MLPConv
+
+def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Tensor]=None, value2: Optional[torch.Tensor]=None):
+    points = np.stack([
+        pos[:,0].detach().cpu().numpy(), 
+        pos[:,1].detach().cpu().numpy(), 
+        value.detach().cpu().numpy()]).T
+    
+    # range_x = points[:,0].max() - points[:,0].min()
+    # range_y = points[:,1].max() - points[:,1].min()
+    # range_z = points[:,2].max() - points[:,2].min()
+
+    # points[:,2] = points[:,2]
+
+    pl = pyvista.Plotter()
+    pl.add_points(
+        points,
+        scalars = np.zeros(points.shape[0]),
+        style='points',)
+    
+    if pos2 is not None:
+        points2 = np.stack([
+            pos2[:,0].detach().cpu().numpy(), 
+            pos2[:,1].detach().cpu().numpy(), 
+            value2.detach().cpu().numpy()]).T
+        # same normalization
+        points2[:,2] = points2[:,2]
+        pl.add_points(
+            points2,
+            scalars = np.ones(points2.shape[0]),
+            style='points',)
+    
+    pl.show()
 
 
 def get_model_instance(model_conf):
@@ -224,11 +256,24 @@ class EPD_with_sampling(nn.Module):
 
                 # input_dim += 2*self.conf["hyperparams"]["fourier_feat_dim"]
             case "new_edges":
-                current_dim, self.final_message_passer = get_obj_from_structure(
-                    in_channels=current_dim, 
-                    str_d=model_structure["final_message_passer"], # same structure as above
+                current_dim, self.new_edges_msg_mlp = get_obj_from_structure(
+                    in_channels=current_dim + self.conf["hyperparams"]["edge_feature_dim"], 
+                    str_d=model_structure["new_edges_mlp"]["msg_mlp"], 
                     conf=conf,
+                    out_channels=current_dim,
                 )
+                self.add_global_info_new_edges = model_structure["new_edges_mlp"].get("add_global_info", False)
+                self.add_BC_info_new_edges = model_structure["new_edges_mlp"].get("add_BC_info", False)
+                if self.add_global_info_new_edges or self.add_BC_info_new_edges:
+                    self.new_edges_msg_activation = eval(model_structure["new_edges_mlp"]["standard_activation"])()
+                    
+                    current_dim, self.new_edges_update_mlp = get_obj_from_structure(
+                        in_channels=current_dim*(1+self.add_global_info_new_edges+self.add_BC_info_new_edges), 
+                        str_d=model_structure["new_edges_mlp"]["update_mlp"], 
+                        conf=conf,
+                        out_channels=current_dim,
+                    )
+
 
         _, self.decoder = get_obj_from_structure(
             in_channels=current_dim, 
@@ -254,8 +299,8 @@ class EPD_with_sampling(nn.Module):
             pos: torch.Tensor,
             batch: torch.Tensor,
             sampling_points: Optional[torch.Tensor] = None,
-            new_edge_index: Optional[torch.Tensor] = None,
-            sampling_points_idx: Optional[torch.Tensor] = None,
+            new_edges: Optional[torch.Tensor] = None,
+            new_edge_attributes: Optional[torch.Tensor] = None,
             **kwargs
         ):
         # x, x_mask, edge_index, edge_attr, batch  = data.x, data.x_mask, data.edge_index, data.edge_attr, data.batch
@@ -365,16 +410,26 @@ class EPD_with_sampling(nn.Module):
                     # dist = torch.where(mask.view(-1,1).repeat((1,2)), distances, torch.tensor((0,0)))
                     # final_dist = torch.cat((dist, torch.linalg.norm(dist, dim=1, keepdim=True)), dim=1)
 
-                    input_to_layer = {
-                            "x": torch.cat((
-                                processed["x"], 
-                                torch.zeros(1, processed["x"].shape[1]))),
-                            "edge_index":new_edge_index,
-                            "edge_attr":vmap(lambda x, y: torch.cat((y-x, torch.linalg.norm(y-x)))(
-                                sampling_points[new_edge_index[0,:]], pos[new_edge_index[1,:]])),
-                            "edge_mask":mask,}
-                    sampled_points_encoding = forward_for_general_layer(self.final_message_passer, input_to_layer)
+                    # no update and no skip because there is no info in the sampled node
                     
+                    tmp_x = processed["x"][new_edges]
+                    tmp_msg = self.new_edges_msg_mlp(
+                        torch.concat((
+                            tmp_x, 
+                            new_edge_attributes), 
+                        dim=1))
+                    
+                    tmp_msg = self.new_edges_msg_activation(tmp_msg.mean(dim=0))
+                    update = self.new_edges_update_mlp(
+                        torch.concat((
+                            tmp_msg, 
+                            X["x_BC"].view(-1) if self.add_global_info_new_edges else torch.FloatTensor().to(x.device),
+                            X["x_graph"].view(-1) if self.add_BC_info_new_edges else torch.FloatTensor().to(x.device),
+                        )))
+                    
+
+                    sampled_points_encoding = tmp_msg + update
+
                 case "baseline_positional_encoder":
                     raise NotImplementedError("need to debug")
                     sampled_points_encoding = self.positional_encoder(sampling_points)
@@ -469,8 +524,10 @@ class PINN(nn.Module):
         if kwargs.get("domain_sampling_points", None) is not None:
             domain_sampling_points = torch.autograd.Variable(kwargs["domain_sampling_points"], requires_grad=True)
             n_domain_points = domain_sampling_points.shape[0]
+            
+            new_edges = kwargs.get("new_edges", None)
         else:
-            domain_sampling_points = torch.autograd.Variable(torch.FloatTensor())
+            domain_sampling_points = torch.autograd.Variable(torch.FloatTensor().to(x.device))
             n_domain_points = 0
 
         if kwargs.get("boundary_sampling_points", None) is not None:
@@ -480,10 +537,13 @@ class PINN(nn.Module):
             boundary_sampling_points = torch.autograd.Variable(kwargs["boundary_sampling_points"], requires_grad=True)
             n_boundary_points = boundary_sampling_points.shape[0]
         else:
-            boundary_sampling_points = torch.autograd.Variable(torch.FloatTensor())
+            boundary_sampling_points = torch.autograd.Variable(torch.FloatTensor().to(x.device))
             n_boundary_points = 0
 
         sampling_points = torch.concatenate((domain_sampling_points, boundary_sampling_points))
+        new_edges = torch.cat((
+            new_edges, 
+            idxs_boundary_sampled.view(-1,1).repeat(1,3)))
         domain_slice = torch.arange(n_domain_points)
         boundary_slice = torch.arange(start=n_domain_points, end=n_domain_points+n_boundary_points)
         
@@ -496,30 +556,30 @@ class PINN(nn.Module):
         # plt.scatter(a[:,0], a[:,1], color="b")
         # plt.scatter(b[:,0], b[:,1], color="r")
 
-        if (new_edge_index := kwargs.get("new_edges_not_shifted", None)) is not None:
-                new_edge_index[0,:] += x.shape[0]
 
-        def compute_output(sampling_points, sampling_points_idx):
-            if new_edge_index is not None:
-                sampling_points_idx += x.shape[0]
+        def compute_output(sampling_points, new_edges):
             
+            new_edge_attributes = torch.cat((
+                    pos[new_edges, :2]-sampling_points, 
+                    torch.linalg.norm(pos[new_edges, :2]-sampling_points, dim=1, keepdim=True)), 
+                dim=1)
             out_samp, out_sup = functional_call(
                 self.net,
                 model_params,
-                (x, x_mask, edge_index, edge_attr, pos, batch, sampling_points, new_edge_index, sampling_points_idx),
+                (x, x_mask, edge_index, edge_attr, pos, batch, sampling_points, new_edges, new_edge_attributes),
             )
             return out_samp, (out_samp, out_sup)
 
 
-        def compute_first_derivative(sampling_points, sampling_points_idx):
+        def compute_first_derivative(sampling_points, new_edges):
             grads_samp, (out_samp, out_sup) = \
-                jacrev(compute_output, has_aux=True, argnums=0)(sampling_points, sampling_points_idx)
+                jacrev(compute_output, has_aux=True, argnums=0)(sampling_points, new_edges)
             return grads_samp, (grads_samp, out_samp, out_sup)
 
 
-        def compute_second_derivative(sampling_points, sampling_points_idx):
+        def compute_second_derivative(sampling_points, new_edges=None):
             hess_samp, (grads_samp, out_samp, out_sup) = \
-                jacrev(compute_first_derivative, has_aux=True, argnums=0)(sampling_points, sampling_points_idx)
+                jacrev(compute_first_derivative, has_aux=True, argnums=0)(sampling_points, new_edges)
             return hess_samp, grads_samp, out_samp, out_sup
         
 
@@ -563,20 +623,31 @@ class PINN(nn.Module):
                 return {}
 
         residuals = {}
-        if sampling_points.shape[0] != 0:
+
+        need_second_derivative = False
+        need_first_derivative = False
+        if self.conf['hyperparams']["flag_BC_PINN"]: need_first_derivative = True
+        match self.conf['hyperparams']["PINN_mode"]:
+                case "supervised_only": pass
+                case "continuity_only": need_first_derivative = True
+                case "full_laminar": need_second_derivative = True
+
+        # TODO: improve this by not computing derivatives when they aren't needed
+        # if need_second_derivative or need_first_derivative:
+        if sampling_points.shape[0]!=0:
             hess_samp, grads_samp, out_samp, out_sup = vmap(
                 compute_second_derivative, out_dims=(0,0,0,None), randomness="different")(
-                    sampling_points, torch.arange(sampling_points.shape[0])
+                    sampling_points, new_edges, 
             )
             
-            if torch.isnan(hess_samp).sum() > 0:
-                print(hess_samp)
-            if torch.isnan(grads_samp).sum() > 0:
-                print(grads_samp)
-            if torch.isnan(out_samp).sum() > 0:
-                print(out_samp)
-            if torch.isnan(out_sup).sum() > 0:
-                print(out_sup)
+            if (tmp := torch.isnan(hess_samp).sum()) > 0:
+                print(f"hess_samp - {tmp} NaNs")
+            if (tmp := torch.isnan(grads_samp).sum()) > 0:
+                print(f"grads_samp - {tmp} NaNs")
+            if (tmp := torch.isnan(out_samp).sum()) > 0:
+                print(f"out_samp - {tmp} NaNs")
+            if (tmp := torch.isnan(out_sup).sum()) > 0:
+                print(f"out_sup - {tmp} NaNs")
 
             residuals.update(get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp))
             
@@ -592,7 +663,7 @@ class PINN(nn.Module):
                 (x, x_mask, edge_index, edge_attr, pos, batch),
             )
 
-        if self.conf["hyperparams"]["domain_sampling"]["add_edges"] and (domain_slice.shape[0] != 0):
+        if self.conf["hyperparams"]["general_sampling"]["add_edges"] and (domain_slice.shape[0] != 0):
             residuals.update({"output_sampled_domain": out_samp[domain_slice]})
 
         return out_sup, residuals
@@ -606,7 +677,7 @@ class PINN(nn.Module):
 
         loss_dict = {}
 
-        if (data is not None) and self.conf["hyperparams"]["domain_sampling"]["add_edges"]:
+        if (data is not None) and self.conf["hyperparams"]["general_sampling"]["add_edges"]:
             
             output_sampled_domain = residuals.pop("output_sampled_domain")
             device = output_sampled_domain.device
@@ -616,15 +687,34 @@ class PINN(nn.Module):
             n = output_sampled_domain.shape[0]
             assert idxs.max()+1 == n, "Something wrong"
 
-            x_vel = torch.zeros(n, device=device).scatter_reduce_(0, idxs, label[faces, 0], "mean")
-            y_vel = torch.zeros(n, device=device).scatter_reduce_(0, idxs, label[faces, 1], "mean")
-            press = torch.zeros(n, device=device).scatter_reduce_(0, idxs, label[faces, 2], "mean")
+            distance_weighted_label = label[faces]*data.new_edges_weights.view(-1,1)
 
-            loss_dict.update({"supervised_on_sampled": self.net.loss(output_sampled_domain, 
-                                                                        torch.stack((x_vel, y_vel, press), dim=1))})
-        else:
-            loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
+            x_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, distance_weighted_label[:,0], "sum", include_self=False)
+            y_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, distance_weighted_label[:,1], "sum", include_self=False)
+            press = torch.ones(n, device=device).scatter_reduce_(0, idxs, distance_weighted_label[:,2], "sum", include_self=False)
 
+            normalization_const = torch.zeros(n, device=device).scatter_reduce_(0, idxs, data.new_edges_weights, "sum", include_self=False)
+
+            gt_in_sampled = torch.stack((x_vel, y_vel, press), dim=1)/normalization_const.view(-1,1)
+
+            # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,0], data.pos[:,:2], data.y[:,0])
+            # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,1], data.pos[:,:2], data.y[:,1])
+            # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,2], data.pos[:,:2], data.y[:,2])
+            # plot_PYVISTA(data.pos[:,:2], data.y[:,0])
+
+            ### WITHOUT WEIGHTS (squared distance)
+            # x_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, label[faces][:,0], "mean", include_self=False)
+            # y_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, label[faces][:,1], "mean", include_self=False)
+            # press = torch.ones(n, device=device).scatter_reduce_(0, idxs, label[faces][:,2], "mean", include_self=False)
+            # gt_in_sampled = torch.stack((x_vel, y_vel, press), dim=1)
+            loss_dict.update({"supervised_on_sampled": self.net.loss(output_sampled_domain, gt_in_sampled)})
+        
+        
+        ### CAN CHOOSE TO ONLY SUPERVISE IN SAMPLED POINTS (but then you have no supervision on mesh points,
+        ###     so it doesn't work very well)
+        loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
+        # else:
+        #     loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
         
         loss_dict.update({k: v.abs().mean() for k,v in residuals.items()})
         
@@ -632,17 +722,3 @@ class PINN(nn.Module):
 
 
 
-def plot_continuity(pos: torch.Tensor, res: torch.Tensor):
-    points = np.stack([
-        pos[:,0].detach().cpu().numpy(), 
-        pos[:,1].detach().cpu().numpy(), 
-        res["continuity"].detach().cpu().numpy()]).T
-    
-    range_x = points[:,0].max() - points[:,0].min()
-    range_y = points[:,1].max() - points[:,1].min()
-    range_z = points[:,2].max() - points[:,2].min()
-
-    points[:,2] = points[:,2]/range_z*max(range_x, range_y)*0.1
-
-    pointcloud = pyvista.PolyData(points)
-    pointcloud.plot()
