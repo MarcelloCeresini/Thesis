@@ -62,7 +62,9 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
     with torch.no_grad():
         total_loss = 0
         total_loss_dict = {}
+        total_optional_values = {}
         total_loss_dict_reweighted = {}
+
         model.eval()
         for batch in loader:
             batch.to(device)
@@ -71,15 +73,21 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
             loss = model.loss(pred, labels, data=batch)
 
             if isinstance(loss, tuple):
-                loss_dict = loss[1]
-                loss = loss[0]
+                standard_loss = loss[0]
+                loss_dict = {k:v*conf.standard_weights[k] for k,v in loss[1].items()}
+                optional_values = {k:v for k,v in loss[2].items()}
+
                 pred = pred[0]
                 for k in loss_dict: 
                     total_loss_dict[k] = total_loss_dict.get(k, 0) + \
                                             loss_dict[k].item()*batch.num_graphs
+                    total_optional_values[k] = total_optional_values.get(k,0) + \
+                                            optional_values[k].item()*batch.num_graphs
                 if conf.dynamic_loss_weights:
                     loss = sum(loss_dict[k]*loss_weights.get(k,1) for k in loss_dict)
-
+                else:
+                    loss = sum(loss_dict[k] for k in loss_dict)
+            
             total_loss += loss.item() * batch.num_graphs
             metric_dict = forward_metric_results(pred.cpu(), labels.cpu(), conf, metric_dict)
             
@@ -93,8 +101,10 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
 
         total_loss /= len(loader.dataset)
         for k in total_loss_dict: total_loss_dict[k] /= len(loader.dataset)
-        for k in total_loss_dict: 
-            total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights.get(k,1)
+        for k in total_optional_values: total_optional_values[k] /= len(loader.dataset)
+        if conf.dynamic_loss_weights:
+            for k in total_loss_dict: 
+                total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights.get(k,1)
         
         metric_results = compute_metric_results(metric_dict, conf)
         metric_aero_dict = metric_aero.compute()
@@ -104,6 +114,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
         # metric_results.update(metric_aero_dict_flattened)
         metric_results.update(metric_aero_dict)
         metric_results.update(total_loss_dict)
+        metric_results.update(total_optional_values)
         metric_results.update(total_loss_dict_reweighted)
 
     return total_loss, metric_results
@@ -168,6 +179,7 @@ def train(
     for epoch in tqdm(range(conf.hyper_params["training"]["n_epochs"]), desc="Epoch", position=0):
         total_loss = 0
         total_loss_dict = {}
+        total_optional_values = {}
         total_loss_dict_reweighted = {}
 
         model.train()
@@ -177,18 +189,19 @@ def train(
             batch.to(conf.device)
             pred = model(**get_input_to_model(batch))
             labels = clean_labels(batch, model.conf)
-
             loss = model.loss(pred, labels, batch)
 
             if isinstance(loss, tuple):
                 standard_loss = loss[0]
                 
                 loss_dict = {k:v*conf.standard_weights[k] for k,v in loss[1].items()}
+                optional_values = {k:v for k,v in loss[2].items()}
                 
                 for k in loss_dict: 
                     total_loss_dict[k] = total_loss_dict.get(k, 0) + \
                                             loss_dict[k].item()*batch.num_graphs # set it with initialization = 0
-
+                    total_optional_values[k] = total_optional_values.get(k,0) + \
+                                            optional_values[k].item()*batch.num_graphs
                 # TODO: do it each BATCH? or each EPOCH? in any case, log each EPOCH?
                 if conf.dynamic_loss_weights:
                     assert conf.main_loss_component_dynamic in loss_dict, f"{conf.main_loss_component_dynamic} not in loss_dict keys: {list(loss_dict.keys())}"
@@ -205,6 +218,7 @@ def train(
                     loss = sum(loss_dict[k]*loss_weights.get(k,1) for k in loss_dict)
                 else:
                     loss = sum(loss_dict[k] for k in loss_dict)
+            
             loss.backward()
             opt.step()
             batch.cpu()
@@ -222,6 +236,7 @@ def train(
 
         total_loss /= len(train_loader.dataset)
         for k in total_loss_dict: total_loss_dict[k] /= len(train_loader.dataset)
+        for k in total_optional_values: total_optional_values[k] /= len(train_loader.dataset)
 
         if WANDB_FLAG:
             log_dict = {
@@ -233,6 +248,7 @@ def train(
                 "num_bad_epochs/end_of_training": scheduler_for_training_end.num_bad_epochs,
             }
             log_dict.update(total_loss_dict)
+            log_dict.update(total_optional_values)
 
             wandb.log(log_dict, epoch)
         else:

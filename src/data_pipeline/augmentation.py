@@ -100,9 +100,15 @@ class SampleDomainPoints(BaseTransform):
                     # message passing only goes to new places for prediction
                     sampled_faces = sampled_padded_faces.T[mask.T]
                     data.new_edges_not_shifted = torch.stack((idxs_tensor, sampled_faces))
-                    data.new_edges_weights = vmap(lambda x, y: 1/torch.linalg.norm(y-x)**2)(
+                    new_edges_weights_tmp = vmap(lambda x, y: 1/torch.linalg.norm((y-x).clamp(min=1e-7))**2)(
                         domain_sampling_points[idxs_tensor], data.pos[sampled_faces][:,:2]
                     )
+
+                    if (tmp := torch.isnan(new_edges_weights_tmp).sum()) > 0:
+                        print(f"distance_weighted_label (in augmentation) - {tmp} NaNs")
+                        print(f"max (in augmentation) - {new_edges_weights_tmp.max()}")
+
+                    data.new_edges_weights = new_edges_weights_tmp
 
                     # import matplotlib.pyplot as plt
                     # for i in range(num_samples):

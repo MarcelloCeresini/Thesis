@@ -418,17 +418,16 @@ class EPD_with_sampling(nn.Module):
                             tmp_x, 
                             new_edge_attributes), 
                         dim=1))
-                    
-                    tmp_msg = self.new_edges_msg_activation(tmp_msg.mean(dim=0))
+                    tmp_msg = tmp_x+tmp_msg
+                    aggregated_msg = tmp_msg.mean(dim=0)
+                    aggregated_msg = self.new_edges_msg_activation(aggregated_msg)
                     update = self.new_edges_update_mlp(
                         torch.concat((
-                            tmp_msg, 
+                            aggregated_msg, 
                             X["x_BC"].view(-1) if self.add_global_info_new_edges else torch.FloatTensor().to(x.device),
                             X["x_graph"].view(-1) if self.add_BC_info_new_edges else torch.FloatTensor().to(x.device),
                         )))
-                    
-
-                    sampled_points_encoding = tmp_msg + update
+                    sampled_points_encoding = aggregated_msg + update
 
                 case "baseline_positional_encoder":
                     raise NotImplementedError("need to debug")
@@ -559,10 +558,11 @@ class PINN(nn.Module):
 
         def compute_output(sampling_points, new_edges):
             
-            new_edge_attributes = torch.cat((
-                    pos[new_edges, :2]-sampling_points, 
-                    torch.linalg.norm(pos[new_edges, :2]-sampling_points, dim=1, keepdim=True)), 
-                dim=1)
+            # if the distance goes to zero, the grad on the norm goes to NaN (because of the derivative of the sqrt)
+            dist = (pos[new_edges, :2]-sampling_points).clamp(min=1e-7) 
+            norm = torch.linalg.norm(dist, dim=1, keepdim=True)
+            new_edge_attributes = torch.cat((dist, norm), dim=1)
+
             out_samp, out_sup = functional_call(
                 self.net,
                 model_params,
@@ -654,7 +654,8 @@ class PINN(nn.Module):
             boundary_residuals = get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp)
             
             if boundary_residuals.get("BC_total", None) is not None:
-                residuals.update({"boundary": boundary_residuals["BC_total"]})
+                residuals.update({"boundary": boundary_residuals.pop("BC_total")})
+                residuals.update({"debug_only_"+k: v for k, v in boundary_residuals.items()})
 
         else:
             out_sup = functional_call(
@@ -689,11 +690,17 @@ class PINN(nn.Module):
 
             distance_weighted_label = label[faces]*data.new_edges_weights.view(-1,1)
 
+            if (tmp := torch.isnan(distance_weighted_label).sum()) > 0:
+                print(f"distance_weighted_label (in loss) - {tmp} NaNs")
+
             x_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, distance_weighted_label[:,0], "sum", include_self=False)
             y_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, distance_weighted_label[:,1], "sum", include_self=False)
             press = torch.ones(n, device=device).scatter_reduce_(0, idxs, distance_weighted_label[:,2], "sum", include_self=False)
 
             normalization_const = torch.zeros(n, device=device).scatter_reduce_(0, idxs, data.new_edges_weights, "sum", include_self=False)
+
+            if (tmp := torch.isnan(normalization_const).sum()) > 0:
+                print(f"normalization_const (in loss) - {tmp} NaNs")
 
             gt_in_sampled = torch.stack((x_vel, y_vel, press), dim=1)/normalization_const.view(-1,1)
 
@@ -716,9 +723,14 @@ class PINN(nn.Module):
         # else:
         #     loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
         
-        loss_dict.update({k: v.abs().mean() for k,v in residuals.items()})
-        
-        return sum(loss_dict.values()), loss_dict
+        optional_values = {}
+        for k in residuals:
+            if "debug_only_" in k:
+                optional_values[k] = residuals[k].abs().mean()
+            else:
+                loss_dict[k] = residuals[k].abs().mean()
+
+        return sum(loss_dict.values()), loss_dict, optional_values
 
 
 
