@@ -81,6 +81,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                 for k in loss_dict: 
                     total_loss_dict[k] = total_loss_dict.get(k, 0) + \
                                             loss_dict[k].item()*batch.num_graphs
+                for k in optional_values:
                     total_optional_values[k] = total_optional_values.get(k,0) + \
                                             optional_values[k].item()*batch.num_graphs
                 if conf.dynamic_loss_weights:
@@ -200,6 +201,8 @@ def train(
                 for k in loss_dict: 
                     total_loss_dict[k] = total_loss_dict.get(k, 0) + \
                                             loss_dict[k].item()*batch.num_graphs # set it with initialization = 0
+                
+                for k in optional_values: 
                     total_optional_values[k] = total_optional_values.get(k,0) + \
                                             optional_values[k].item()*batch.num_graphs
                 # TODO: do it each BATCH? or each EPOCH? in any case, log each EPOCH?

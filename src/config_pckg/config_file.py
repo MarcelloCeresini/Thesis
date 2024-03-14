@@ -268,6 +268,8 @@ class Config():
             "continuity": 10,
             "boundary": 1,
             "supervised_on_sampled": 1,
+            "momentum_x": 1,
+            "momentum_y": 1,
         }
 
         self.dynamic_loss_weights = False
