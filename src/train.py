@@ -74,7 +74,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
 
             if isinstance(loss, tuple):
                 standard_loss = loss[0]
-                loss_dict = {k:v*conf.standard_weights[k] for k,v in loss[1].items()}
+                loss_dict = {k:v*conf.standard_weights.get(k,1) for k,v in loss[1].items()}
                 optional_values = {k:v for k,v in loss[2].items()}
 
                 pred = pred[0]
@@ -194,7 +194,7 @@ def train(
             if isinstance(loss, tuple):
                 standard_loss = loss[0]
                 
-                loss_dict = {k:v*conf.standard_weights[k] for k,v in loss[1].items()}
+                loss_dict = {k:v*conf.standard_weights.get(k,1) for k,v in loss[1].items()}
                 optional_values = {k:v for k,v in loss[2].items()}
                 
                 for k in loss_dict: 

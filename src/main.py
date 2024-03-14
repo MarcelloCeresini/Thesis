@@ -43,7 +43,10 @@ if __name__ == "__main__":
                 config=full_conf,
             )
             run_name = wandb.run.dir.split(os.sep)[-2]
-            model_save_path = os.path.join(conf.DATA_DIR, "model_runs", f"{run_name}.pt")
+            pardir = os.path.join(conf.DATA_DIR, "model_runs")
+            model_save_path = os.path.join(pardir, f"{run_name}.pt")
+            if not os.path.isdir(pardir):
+                os.mkdir(pardir)
             torch.save(full_conf, model_save_path.split(".")[0]+"_full_conf.pkl")
 
             wandb.define_metric("train_loss", summary="min")

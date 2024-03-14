@@ -242,7 +242,7 @@ class Config():
         self.output_dim = len(self.labels_to_keep_for_training)
 
         self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar"] \
-                                = "continuity_only"
+                                = "full_laminar"
         self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] = \
             "new_edges"
