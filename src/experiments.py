@@ -45,7 +45,7 @@ def get_training_data(run_name, conf, from_checkpoints:bool):
 
 def get_last_training(conf, from_checkpoints: bool =False):
     if not from_checkpoints:
-        dirlist = sorted(os.listdir(os.path.join(conf.DATA_DIR, "model_runs")))
+        dirlist = sorted(glob.glob(os.path.join(conf.DATA_DIR, "model_runs", "*.pt")))
         run_name = dirlist[-1].split(".")[0]
     else:
         dirlist = sorted(os.listdir(os.path.join(conf.DATA_DIR, "model_checkpoints")))
@@ -79,6 +79,8 @@ if __name__ == "__main__":
         get_data_loaders(conf, n_workers=0)
     print("done")
 
+
+    # model, model_conf, run_name = get_last_training(conf)
     ####### print results of last training
     # plot_test_images_from_last_run(conf, test_dataloader)
 

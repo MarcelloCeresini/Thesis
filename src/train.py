@@ -160,6 +160,7 @@ def train(
         cooldown=conf.hyper_params["training"]["cooldown"],
         threshold=0, 
         threshold_mode='abs',
+        mode="min",
     )
 
     scheduler_for_training_end = lr_scheduler.ReduceLROnPlateau(
@@ -167,9 +168,9 @@ def train(
         patience=conf.hyper_params["training"]["patience_end_training"],
         threshold=0, 
         threshold_mode='abs',
+        mode="min",
     )
 
-    best_loss = 1000000
     best_epoch = 0
 
     print_memory_state_gpu("Before training", conf)
@@ -269,19 +270,32 @@ def train(
             val_loss, metric_results = test(val_loader, model, conf, loss_weights)
             # torch.cuda.empty_cache()
 
-            if val_loss < best_loss:
-                best_loss = val_loss
+            metric = sum(metric_results["MAE"].values())
+            if metric < scheduler.best:
                 best_epoch = epoch
                 model_save_path = os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{epoch}_ckpt.pt")
                 torch.save(model.state_dict(), model_save_path)
             
             if WANDB_FLAG:
                 wandb.log({"val_loss": val_loss}, epoch)
+                wandb.log({"best_metric": metric}, epoch)
                 wandb.log({f"val_{k}":v for k,v in metric_results.items()}, epoch)
             else:
                 writer.add_scalar(f"{conf.hyper_params['loss']}/val", val_loss, epoch)
                 write_metric_results(metric_results, writer, epoch)
+
+        # scheduler.step(metrics=val_loss)
+        # scheduler_for_training_end.step(metrics=val_loss)
+        scheduler.step(metrics=metric)
+        scheduler_for_training_end.step(metrics=metric)
         
+        if scheduler_for_training_end.num_bad_epochs >= scheduler_for_training_end.patience:
+            print(f"Restoring best weights of epoch {best_epoch}")
+            model.load_state_dict(
+                torch.load(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{best_epoch}_ckpt.pt"))
+            )
+            break
+
         if conf.dynamic_loss_weights: 
             for k in total_loss_dict: 
                 total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights.get(k,1)
@@ -291,16 +305,4 @@ def train(
                 loss_weights[k] = (1-conf.lambda_dynamic_weights) * loss_weights.get(k, 1) + \
                                     conf.lambda_dynamic_weights/conf.gamma_loss * (mean_grads[conf.main_loss_component_dynamic]/mean_grads[k])
 
-        if scheduler_for_training_end.num_bad_epochs >= scheduler_for_training_end.patience:
-            print(f"Restoring best weights of epoch {best_epoch}")
-            model.load_state_dict(
-                torch.load(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{best_epoch}_ckpt.pt"))
-            )
-            break
-
-        # scheduler.step(metrics=val_loss)
-        # scheduler_for_training_end.step(metrics=val_loss)
-        scheduler.step(metrics=sum(metric_results["MAE"].values()))
-        scheduler_for_training_end.step(metrics=sum(metric_results["MAE"].values()))
-        
     return model

@@ -282,6 +282,14 @@ class EPD_with_sampling(nn.Module):
             out_channels=output_dim,
         )
 
+        if self.conf["hyperparams"].get("bool_bootstrap_bias",False):
+            new_bias = self.conf["hyperparams"]["bootstrap_bias"]
+            ordered_bias = [new_bias["x-velocity"], new_bias["y-velocity"], new_bias["pressure"]]
+            with torch.no_grad():
+                self.decoder[-1].bias = nn.Parameter(
+                    torch.tensor(ordered_bias)
+                )
+
 
     def get_fourier_pos_enc(self, x, learnable_matrix) -> torch.Tensor:
         '''https://arxiv.org/pdf/2106.02795.pdf'''

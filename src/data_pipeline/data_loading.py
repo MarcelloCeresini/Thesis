@@ -12,7 +12,7 @@ import torch_geometric.transforms as pyg_t
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Batch
 
-from data_pipeline.augmentation import SampleBoundaryPoints, SampleDomainPoints
+from data_pipeline.augmentation import SampleBoundaryPoints, SampleDomainPoints, RemoveRadialAttributes
 
 
 class CfdDataset(InMemoryDataset):
@@ -33,6 +33,8 @@ def get_data_loaders(conf: Config, n_workers: Optional[int] = 4):
     # to avoid saving n different graphs for n different snapshots of the same simulation
     full_conf = conf.get_logging_info()
     transform_list = []
+    if not conf.bool_radial_attributes:
+        transform_list.append(RemoveRadialAttributes(conf.n_radial_attributes))
     if conf.flag_BC_PINN:
         transform_list.append(SampleBoundaryPoints(full_conf))
     if conf.PINN_mode != "supervised_only" or conf.domain_sampling["add_edges"]:

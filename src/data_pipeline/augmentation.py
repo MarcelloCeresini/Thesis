@@ -4,6 +4,16 @@ import torch_geometric.data as pyg_data
 
 from torch import vmap
 
+class RemoveRadialAttributes(BaseTransform):
+    def __init__(self, n_radial_attributes) -> None:
+        super().__init__()
+        self.n_radial_attributes = n_radial_attributes
+
+    def forward(self, data: torch.Any) -> torch.Any:
+        data.x = data.x[:,:-self.n_radial_attributes]
+        return data
+
+
 class SampleDomainPoints(BaseTransform):
     def __init__(self, full_conf) -> None:
         super().__init__()

@@ -62,6 +62,12 @@ class Config():
             except yaml.YAMLError as exc:
                 print(exc)
 
+        with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "bootstrap_bias.yaml"), "r") as stream:
+            try:
+                self.bootstrap_bias = yaml.safe_load(stream)
+            except yaml.YAMLError as exc:
+                print(exc)
+
         match mode:
             case None:
                 pass
@@ -237,12 +243,18 @@ class Config():
             }
             for metric_name, metric_obj in self.metrics.items()}
 
-        # TODO: find another way to apply initial mask?
-        self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)+self.n_radial_attributes
+        self.bool_bootstrap_bias = True
+
+        self.bool_radial_attributes = False
+        if self.bool_radial_attributes:
+            self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)+self.n_radial_attributes
+        else:
+            self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)
+
         self.output_dim = len(self.labels_to_keep_for_training)
 
         self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar"] \
-                                = "full_laminar"
+                                = "continuity_only"
         self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] = \
             "new_edges"
@@ -294,6 +306,9 @@ class Config():
             "output_dim": self.output_dim,
             "edge_feature_dim": len(self.graph_edge_attr_list),
             "label_dim": len(self.labels_to_keep_for_training),
+            "bool_bootstrap_bias": self.bool_bootstrap_bias,
+            "bootstrap_bias": self.bootstrap_bias,
+            "bool_radial_attributes": self.bool_radial_attributes,
             "PINN_mode": self.PINN_mode,
             "flag_BC_PINN": self.flag_BC_PINN,
             "feat_dict": self.graph_node_feature_dict,
