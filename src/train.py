@@ -273,6 +273,7 @@ def train(
             metric = sum(metric_results["MAE"].values())
             if metric < scheduler.best:
                 best_epoch = epoch
+                https://pytorch.org/tutorials/recipes/recipes/saving_and_loading_a_general_checkpoint.html
                 model_save_path = os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{epoch}_ckpt.pt")
                 torch.save(model.state_dict(), model_save_path)
             
