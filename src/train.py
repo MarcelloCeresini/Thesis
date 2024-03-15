@@ -278,7 +278,8 @@ def train(
             
             if WANDB_FLAG:
                 wandb.log({"val_loss": val_loss}, epoch)
-                wandb.log({"best_metric": metric}, epoch)
+                wandb.log({"metric": metric}, epoch)
+                wandb.log({"best_metric": scheduler.best}, epoch)
                 wandb.log({f"val_{k}":v for k,v in metric_results.items()}, epoch)
             else:
                 writer.add_scalar(f"{conf.hyper_params['loss']}/val", val_loss, epoch)
