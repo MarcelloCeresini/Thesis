@@ -848,7 +848,7 @@ class MeshCompleteInfo:
         # if not mode=="face":
         # raise NotImplementedError("Need to change implementation")
 
-        is_BC = self.face_center_features_mask[-1]
+        is_BC = self.face_center_features_mask[:,-1]
         edges = self.FcFc_edges # TODO: bidirectional?
 
         n_nodes = len(is_BC)
@@ -912,6 +912,7 @@ class MeshCompleteInfo:
                 what_to_plot = None,
                 labels: Optional[torch.Tensor] = None,
                 run_name: Optional[str] = None,
+                return_meshes: Optional[bool] = None,
                 ):
         '''
         what_to_plot whould be a list of tuples (tup[0], tup[1], tup[2]):
@@ -925,7 +926,7 @@ class MeshCompleteInfo:
                 - additional special value "streamlines" in case --> ("cell", "label", "velocity") --> automatically add streamlines
         '''
         assert self.conf.dim == 2, "Implement dim = 3"
-        assert (what_to_plot is not None) or (labels is not None), "Nothing to plot specified"
+        assert (what_to_plot is not None) or (labels is not None) or (return_meshes is not None), "Nothing to plot specified"
         # TODO: should we create permanent objects to avoid recomputation?
 
         if self.vertex_labels is not None:
@@ -961,6 +962,16 @@ class MeshCompleteInfo:
             self.cell_center_labels = pd.DataFrame(
                 [np.mean(self.face_center_labels.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
             )
+
+        if return_meshes is not None:
+            tmp = []
+            if self.vertex_labels is not None:
+                tmp.append(vertex_pyv_mesh)
+            tmp.append(face_pyv_mesh)
+            if self.face_center_labels is not None:
+                tmp.append(cell_pyv_mesh)
+            return tmp
+
 
         if labels is not None:
             # columns = self.conf.labels_to_keep_for_training # TODO: update all MeshComplete files from scratch
