@@ -245,7 +245,7 @@ class Config():
 
         self.bool_bootstrap_bias = True
 
-        self.bool_radial_attributes = False
+        self.bool_radial_attributes = True
         if self.bool_radial_attributes:
             self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)+self.n_radial_attributes
         else:
@@ -254,7 +254,7 @@ class Config():
         self.output_dim = len(self.labels_to_keep_for_training)
 
         self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar"] \
-                                = "continuity_only"
+                                = "full_laminar"
         self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] = \
             "new_edges"
@@ -264,24 +264,24 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.5}
-        self.n_sampled_new_edges = 3
+                                    "percentage": 0.8}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "percentage_of_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
-                                    "percentage": 0.8,
+                                    "percentage": 0.9,
                                     "shift_on_face":True}
 
         self.general_sampling = {"add_edges": True,}
+        self.n_sampled_new_edges = 3
 
         self.standard_weights = {
             "supervised": 1,
-            "continuity": 10,
-            "boundary": 1,
+            "continuity": 100,
+            "boundary": 10,
             "supervised_on_sampled": 1,
-            "momentum_x": 1,
-            "momentum_y": 1,
+            "momentum_x": 1000,
+            "momentum_y": 1000,
         }
 
         self.dynamic_loss_weights = False

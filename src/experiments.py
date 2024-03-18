@@ -6,6 +6,7 @@ import numpy as np
 import utils
 from tqdm import tqdm
 
+import wandb
 import torch
 import torch_geometric
 from torch_geometric.data import Data
@@ -22,6 +23,7 @@ from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders, CfdDataset
 from utils import convert_mesh_complete_info_obj_to_graph, plot_gt_pred_label_comparison, get_input_to_model
 from models.models import get_model_instance, PINN
+from train import test
 
 
 def get_training_data(run_name, conf, from_checkpoints:bool):
@@ -59,9 +61,7 @@ def get_last_training(conf, from_checkpoints: bool =False):
     return model, model_conf, run_name
 
 
-def plot_test_images_from_last_run(conf, test_dataloader):
-
-    model, model_conf, run_name = get_last_training(conf, from_checkpoints=True)
+def plot_test_images_from_last_run(conf, model, run_name, test_dataloader):
 
     for batch in tqdm(test_dataloader):
         pred_batch = model(**get_input_to_model(batch))
@@ -73,44 +73,63 @@ def plot_test_images_from_last_run(conf, test_dataloader):
         for i in range(len(batch)):
             data = batch[i]
             pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
-            plot_gt_pred_label_comparison(data, pred.detach().numpy(), conf, run_name=run_name)
+            plot_gt_pred_label_comparison(data, pred.detach().numpy(), conf, run_name=os.path.basename(run_name))
 
 
+def add_test_results_from_last_checkpoint(conf, test_dataloader):
+    model, model_conf, run_name = get_last_training(conf, from_checkpoints=True)
+
+    id = run_name.split("-")[-1]
+    wandb.init(id=id, resume="must")
+
+    with torch.no_grad():
+        test_loss, metric_results = test(test_dataloader, model, conf)
+        print(f"Test loss: {test_loss}")
+        print(f"Test metrics: {metric_results}")
+
+        metric_results = {f"test_{k}":v for k,v in metric_results.items()}
+        metric_results.update({"test_loss":test_loss})
+        wandb.log(metric_results)
+
+        plot_test_images_from_last_run(conf, model, run_name, test_dataloader)
+        
 if __name__ == "__main__":
     conf = Config()
-
-
-    # model, model_conf, run_name = get_last_training(conf)
-    ####### print results of last training
-    # plot_test_images_from_last_run(conf, test_dataloader)
 
     print("Getting dataloaders")
     train_dataloader, val_dataloader, test_dataloader = \
         get_data_loaders(conf, n_workers=0)
     print("done")
 
-    ######## try if the model works
-    model_conf = conf.get_logging_info()
-    model = get_model_instance(model_conf) # build model
+    # model, model_conf, run_name = get_last_training(conf)
+    ####### print results of last training
+    # plot_test_images_from_last_run(conf, test_dataloader)
+    model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
+    plot_test_images_from_last_run(conf, model, run_name, test_dataloader)
 
-    conf.device = "cpu"
 
-    model.to(conf.device)
+    # ######## try if the model works
+    # model_conf = conf.get_logging_info()
+    # model = get_model_instance(model_conf) # build model
 
-    opt = Adam(
-        params = model.parameters(),
-        lr = conf.hyper_params["training"]["lr"],
-        weight_decay = conf.hyper_params["training"]["weight_decay"],
-    )
-    opt.zero_grad(set_to_none=True)
+    # conf.device = "cpu"
 
-    for batch in train_dataloader:
-        batch.to(conf.device)
-    # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
-    y = model(**get_input_to_model(batch))
-    # plt.show()
-    loss = model.loss(y, batch.y, batch)
-    loss[0].backward()
-    opt.step()
-    model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
-    print(model_summary)
+    # model.to(conf.device)
+
+    # opt = Adam(
+    #     params = model.parameters(),
+    #     lr = conf.hyper_params["training"]["lr"],
+    #     weight_decay = conf.hyper_params["training"]["weight_decay"],
+    # )
+    # opt.zero_grad(set_to_none=True)
+
+    # for batch in train_dataloader:
+    #     batch.to(conf.device)
+    # # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
+    # y = model(**get_input_to_model(batch))
+    # # plt.show()
+    # loss = model.loss(y, batch.y, batch)
+    # loss[0].backward()
+    # opt.step()
+    # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
+    # print(model_summary)
