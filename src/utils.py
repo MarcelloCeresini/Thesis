@@ -844,9 +844,9 @@ class MeshCompleteInfo:
         self.update_path(filename)
 
 
-    def get_min_distance_from_BC(self, mode: Literal["vertex", "face", "cell"]="face"):
+    def get_distance_from_BC(self, mode: Literal["vertex", "face", "cell"]="face"):
         # if not mode=="face":
-        raise NotImplementedError("Need to change implementation")
+        # raise NotImplementedError("Need to change implementation")
 
         is_BC = self.face_center_features_mask[-1]
         edges = self.FcFc_edges # TODO: bidirectional?
