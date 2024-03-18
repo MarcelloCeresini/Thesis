@@ -36,7 +36,12 @@ def get_training_data(run_name, conf, from_checkpoints:bool):
     else:
         checkpoints = sorted(os.listdir(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name)))
         idx_max_ckpt = np.argmax([int(x.split("_")[0]) for x in checkpoints])
-        model.load_state_dict(torch.load(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, checkpoints[idx_max_ckpt])))
+        if run_name.split("_")[-1] == "opt":
+            tmp = torch.load(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, checkpoints[idx_max_ckpt]))
+            epoch = tmp["epoch"]
+            model.load_state_dict(tmp["model_state_dict"])
+            opt = Adam()
+            opt.load_state_dict(tmp["optimizer_state_dict"])
 
     model.eval()
 
@@ -74,16 +79,15 @@ def plot_test_images_from_last_run(conf, test_dataloader):
 if __name__ == "__main__":
     conf = Config()
 
-    print("Getting dataloaders")
-    train_dataloader, val_dataloader, test_dataloader = \
-        get_data_loaders(conf, n_workers=0)
-    print("done")
-
 
     # model, model_conf, run_name = get_last_training(conf)
     ####### print results of last training
     # plot_test_images_from_last_run(conf, test_dataloader)
 
+    print("Getting dataloaders")
+    train_dataloader, val_dataloader, test_dataloader = \
+        get_data_loaders(conf, n_workers=0)
+    print("done")
 
     ######## try if the model works
     model_conf = conf.get_logging_info()

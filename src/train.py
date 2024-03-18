@@ -273,9 +273,16 @@ def train(
             metric = sum(metric_results["MAE"].values())
             if metric < scheduler.best:
                 best_epoch = epoch
-                https://pytorch.org/tutorials/recipes/recipes/saving_and_loading_a_general_checkpoint.html
-                model_save_path = os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{epoch}_ckpt.pt")
-                torch.save(model.state_dict(), model_save_path)
+                
+                model_save_path = os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{epoch}_ckpt_opt.pt")
+                
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': opt.state_dict(),
+                    }, model_save_path)
+                
+                # torch.save(model.state_dict(), model_save_path)
             
             if WANDB_FLAG:
                 wandb.log({"val_loss": val_loss}, epoch)
@@ -293,9 +300,8 @@ def train(
         
         if scheduler_for_training_end.num_bad_epochs >= scheduler_for_training_end.patience:
             print(f"Restoring best weights of epoch {best_epoch}")
-            model.load_state_dict(
-                torch.load(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{best_epoch}_ckpt.pt"))
-            )
+            tmp = torch.load(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name, f"{best_epoch}_ckpt_opt.pt"))
+            model.load_state_dict(tmp["model_state_dict"])
             break
 
         if conf.dynamic_loss_weights: 
