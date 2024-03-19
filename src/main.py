@@ -145,6 +145,9 @@ if __name__ == "__main__":
             if WANDB_FLAG:
                 metric_results = {f"test_{k}":v for k,v in metric_results.items()}
                 metric_results.update({"test_loss":test_loss})
+                final_metric = sum(metric_results["MAE"].values())
+                metric_results.update({"test_metric":final_metric})
+
                 wandb.log(metric_results)
             else:
                 metric_dict = {}
