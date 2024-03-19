@@ -83,14 +83,12 @@ if __name__ == "__main__":
     
     for path_m, path_g in tqdm(zip(meshComplete_paths, graph_paths)):
         # assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
-        # with open(path_m, "rb") as f:
-        #     meshCI = pickle.load(f)
+        with open(path_m, "rb") as f:
+            meshCI = pickle.load(f)
 
         data = torch.load(path_g)
         # data.len_faces = torch.tensor([len(f) for f in data.faces_in_cell])
-        data.faces_in_cell = torch.nn.utils.rnn.pad_sequence(
-            data.faces_in_cell, padding_value=-1
-        )
+        data.turbolence = meshCI.face_center_labels[["turb-kinetic-energy", "turb-diss-rate"]]
 
         # data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
         # tmp1, tmp2 = meshCI.get_triangulated_cells()

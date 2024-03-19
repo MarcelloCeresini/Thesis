@@ -108,6 +108,11 @@ class Config():
             'pressure',
         ]
 
+        self.labels_to_keep_for_training_turbulence = [
+            'turb-kinetic-energy',
+            'turb-diss-rate',
+        ]
+
         self.csv_features = self.features_to_keep + self.features_coordinates + self.features_to_remove
 
         self.active_vectors_2d = ['x-velocity', 'y-velocity']
@@ -251,9 +256,12 @@ class Config():
         else:
             self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)
 
+        self.output_turbulence: bool = True
+        if self.output_turbulence:
+            self.labels_to_keep_for_training += self.labels_to_keep_for_training_turbulence
         self.output_dim = len(self.labels_to_keep_for_training)
-
-        self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar"] \
+        
+        self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar", "turbulent_kw", "turbulent_kw_nu_t_derived"] \
                                 = "full_laminar"
         self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] = \
@@ -264,12 +272,12 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.8}
+                                    "percentage": 0.5}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "percentage_of_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
-                                    "percentage": 0.9,
+                                    "percentage": 0.7,
                                     "shift_on_face":True}
 
         self.general_sampling = {"add_edges": True,}
@@ -284,11 +292,11 @@ class Config():
             "momentum_y": 1000,
         }
 
-        self.dynamic_loss_weights = False
+        self.dynamic_loss_weights = True
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"
-        self.main_loss_component_dynamic = "supervised_on_sampled"
+        self.main_loss_component_dynamic = "supervised"
         self.lambda_dynamic_weights = 0.1 # NSFnets arXiv:2003.06496v1
-        self.gamma_loss = 5
+        self.gamma_loss = 10
 
         self.logging = {
             "model_log_mode": "all",

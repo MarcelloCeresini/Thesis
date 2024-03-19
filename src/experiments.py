@@ -104,32 +104,32 @@ if __name__ == "__main__":
     # model, model_conf, run_name = get_last_training(conf)
     ####### print results of last training
     # plot_test_images_from_last_run(conf, test_dataloader)
-    model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
-    plot_test_images_from_last_run(conf, model, run_name, test_dataloader)
+    # model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
+    # plot_test_images_from_last_run(conf, model, run_name, test_dataloader)
 
 
     # ######## try if the model works
-    # model_conf = conf.get_logging_info()
-    # model = get_model_instance(model_conf) # build model
+    model_conf = conf.get_logging_info()
+    model = get_model_instance(model_conf) # build model
 
-    # conf.device = "cpu"
+    conf.device = "cpu"
 
-    # model.to(conf.device)
+    model.to(conf.device)
 
-    # opt = Adam(
-    #     params = model.parameters(),
-    #     lr = conf.hyper_params["training"]["lr"],
-    #     weight_decay = conf.hyper_params["training"]["weight_decay"],
-    # )
-    # opt.zero_grad(set_to_none=True)
+    opt = Adam(
+        params = model.parameters(),
+        lr = conf.hyper_params["training"]["lr"],
+        weight_decay = conf.hyper_params["training"]["weight_decay"],
+    )
+    opt.zero_grad(set_to_none=True)
 
-    # for batch in train_dataloader:
-    #     batch.to(conf.device)
-    # # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
-    # y = model(**get_input_to_model(batch))
-    # # plt.show()
-    # loss = model.loss(y, batch.y, batch)
-    # loss[0].backward()
-    # opt.step()
-    # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
-    # print(model_summary)
+    for batch in train_dataloader:
+        batch.to(conf.device)
+    # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
+    y = model(**get_input_to_model(batch))
+    # plt.show()
+    loss = model.loss(y, batch.y, batch)
+    loss[0].backward()
+    opt.step()
+    model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
+    print(model_summary)

@@ -1147,6 +1147,9 @@ class MeshCompleteInfo:
                             pl.camera_position = "xy"
                             pl.enable_anti_aliasing()
                             pl.show()
+                    case _:
+                        raise NotImplementedError()
+                            
 
 
 def print_memory_state_gpu(text, conf):

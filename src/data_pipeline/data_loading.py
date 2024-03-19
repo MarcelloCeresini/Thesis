@@ -12,7 +12,7 @@ import torch_geometric.transforms as pyg_t
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Batch
 
-from data_pipeline.augmentation import SampleBoundaryPoints, SampleDomainPoints, RemoveRadialAttributes
+from data_pipeline.augmentation import SampleBoundaryPoints, SampleDomainPoints, RemoveRadialAttributes, AddTurbulentLabels
 
 
 class CfdDataset(InMemoryDataset):
@@ -39,6 +39,8 @@ def get_data_loaders(conf: Config, n_workers: Optional[int] = 4):
         transform_list.append(SampleBoundaryPoints(full_conf))
     if conf.PINN_mode != "supervised_only" or conf.domain_sampling["add_edges"]:
         transform_list.append(SampleDomainPoints(full_conf))
+    if conf.output_turbulence:
+        transform_list.append(AddTurbulentLabels())
 
     transforms = pyg_t.Compose(transform_list)
 

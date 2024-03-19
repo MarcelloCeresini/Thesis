@@ -284,7 +284,13 @@ class EPD_with_sampling(nn.Module):
 
         if self.conf["hyperparams"].get("bool_bootstrap_bias",False):
             new_bias = self.conf["hyperparams"]["bootstrap_bias"]
-            ordered_bias = [new_bias["x-velocity"], new_bias["y-velocity"], new_bias["pressure"]]
+            if self.conf["hyperparams"]["label_dim"] == 3:
+                ordered_bias = [new_bias["x-velocity"], new_bias["y-velocity"], new_bias["pressure"]]
+            elif self.conf["hyperparams"]["label_dim"] == 5:
+                ordered_bias = [new_bias["x-velocity"], new_bias["y-velocity"], new_bias["pressure"],
+                                new_bias['turb-kinetic-energy'], new_bias['turb-diss-rate']]
+            else:
+                raise ValueError("Not possible")
             with torch.no_grad():
                 self.decoder[-1].bias = nn.Parameter(
                     torch.tensor(ordered_bias)
@@ -512,6 +518,23 @@ class PINN(nn.Module):
         return residual
 
 
+    def get_stress_tensors(self, k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
+                                            u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True):
+        '''tij = k/w * (dui/dxj + duj/dxi) - (2/3)*k*delta_cronecker(i,j)'''
+        if as_solver:
+            nu_t = k/w
+            txx_x = 2*(nu_t*u_xx - k_x/3)
+            txy_y = nu_t*(u_yy+v_xy)
+            tyx_x = nu_t*(v_xx+u_yx)
+            tyy_y = 2*(nu_t*v_yy - k_y/3)
+        else:
+            txx_x = 2*((k_x*u_x+k*u_xx)/w - k*u_x*w_x/w**2 - k_x/3)
+            txy_y = (k_y*(u_y+v_x) + k*(u_yy+v_xy))/w - (u_y+v_x)*k*w_y/w**2
+            tyx_x = (k_x*(v_x+u_y) + k*(v_xx+u_yx))/w - (v_x+u_y)*k*w_x/w**2
+            tyy_y = 2*((k_y*v_y+k*v_yy)/w - k*v_y*w_y/w**2 - k_y/3)
+        return txx_x, txy_y, tyx_x, tyy_y
+
+
     def forward(self,
             x: torch.Tensor,
             x_mask: torch.Tensor, 
@@ -591,19 +614,35 @@ class PINN(nn.Module):
             return hess_samp, grads_samp, out_samp, out_sup
         
 
-        def get_correct_slice(slice_idxs, hess_samp, grads_samp, out_samp):
+        def get_correct_slice(slice_idxs, hess_samp, grads_samp, out_samp, turbolence=False):
             u, v, p = out_samp[slice_idxs,0], out_samp[slice_idxs,1], out_samp[slice_idxs,2]
             u_x, u_y = grads_samp[slice_idxs,0,0], grads_samp[slice_idxs,0,1]
             v_x, v_y = grads_samp[slice_idxs,1,0], grads_samp[slice_idxs,1,1]
             p_x, p_y = grads_samp[slice_idxs,2,0], grads_samp[slice_idxs,2,1]
             u_xx, u_yy = hess_samp[slice_idxs,0,0,0], hess_samp[slice_idxs,0,1,1]
             v_xx, v_yy = hess_samp[slice_idxs,1,0,0], hess_samp[slice_idxs,1,1,1]
-            return u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy
-
+            if not turbolence:
+                return u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy
+            else:
+                k, w = out_samp[slice_idxs,3], out_samp[slice_idxs,4]
+                k_x, k_y = grads_samp[slice_idxs,3,0], grads_samp[slice_idxs,3,1]
+                w_x, w_y = grads_samp[slice_idxs,4,0], grads_samp[slice_idxs,4,1]
+                u_xy, u_yx = hess_samp[slice_idxs,0,1,0], hess_samp[slice_idxs,0,0,1]
+                v_xy, v_yx = hess_samp[slice_idxs,1,1,0], hess_samp[slice_idxs,1,0,1]
+                return u, v, p, k, w, \
+                        u_x, u_y, v_x, v_y, p_x, p_y, k_x, k_y, w_x, w_y, \
+                        u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy
 
         def get_domain_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
-            u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
-                slice_idxs, hess_samp, grads_samp, out_samp)
+            if not "turbulent_kw" in self.conf['hyperparams']["PINN_mode"]:
+                u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
+                    slice_idxs, hess_samp, grads_samp, out_samp, turbolence=False)
+            else:
+                u, v, p, k, w, \
+                u_x, u_y, v_x, v_y, p_x, p_y, k_x, k_y, w_x, w_y, \
+                u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy = get_correct_slice(
+                    slice_idxs, hess_samp, grads_samp, out_samp, turbolence=True)
+
             residuals = {}
             match self.conf['hyperparams']["PINN_mode"]:
                 case "supervised_only":
@@ -614,10 +653,25 @@ class PINN(nn.Module):
                     residuals.update({"continuity": (u_x + v_y),
                                         "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re,
                                         "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re,})
+                case "turbulent_kw":
+                    assert self.conf.output_turbulence, "Cannot use turbolent equations if you don't output turbulence"
+                    txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
+                        u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True)
+                    residuals.update({"continuity": (u_x + v_y),
+                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re + txx_x + txy_y,
+                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re + tyx_x + tyy_y,})
+                case "turbulent_kw_nu_t_derived":
+                    assert self.conf.output_turbulence, "Cannot use turbolent equations if you don't output turbulence"
+                    txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
+                        u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=False)
+                    residuals.update({"continuity": (u_x + v_y),
+                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re + txx_x + txy_y,
+                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re + tyx_x + tyy_y,})
                 case _:
                     raise NotImplementedError(f"{self.conf['hyperparams']['PINN_mode']} is not implemented yet")
             
             return residuals
+
 
         def get_boundary_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
             u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
@@ -701,16 +755,28 @@ class PINN(nn.Module):
             if (tmp := torch.isnan(distance_weighted_label).sum()) > 0:
                 print(f"distance_weighted_label (in loss) - {tmp} NaNs")
 
-            x_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, distance_weighted_label[:,0], "sum", include_self=False)
-            y_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, distance_weighted_label[:,1], "sum", include_self=False)
-            press = torch.ones(n, device=device).scatter_reduce_(0, idxs, distance_weighted_label[:,2], "sum", include_self=False)
+            x_vel = torch.ones(n, device=device, 
+                dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,0], "sum", include_self=False)
+            y_vel = torch.ones(n, device=device, 
+                dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,1], "sum", include_self=False)
+            press = torch.ones(n, device=device, 
+                dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,2], "sum", include_self=False)
 
+            if output_sampled_domain.shape[1] > 3:
+                k_turb = torch.ones(n, device=device, 
+                    dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,3], "sum", include_self=False)
+                w_turb = torch.ones(n, device=device, 
+                    dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,4], "sum", include_self=False)
+            
             normalization_const = torch.zeros(n, device=device).scatter_reduce_(0, idxs, data.new_edges_weights, "sum", include_self=False)
 
             if (tmp := torch.isnan(normalization_const).sum()) > 0:
                 print(f"normalization_const (in loss) - {tmp} NaNs")
 
-            gt_in_sampled = torch.stack((x_vel, y_vel, press), dim=1)/normalization_const.view(-1,1)
+            if output_sampled_domain.shape[1] <= 3:
+                gt_in_sampled = torch.stack((x_vel, y_vel, press), dim=1)/normalization_const.view(-1,1)
+            else:
+                gt_in_sampled = torch.stack((x_vel, y_vel, press, k_turb, w_turb), dim=1)/normalization_const.view(-1,1)
 
             # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,0], data.pos[:,:2], data.y[:,0])
             # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,1], data.pos[:,:2], data.y[:,1])

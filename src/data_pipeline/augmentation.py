@@ -13,6 +13,10 @@ class RemoveRadialAttributes(BaseTransform):
         data.x = data.x[:,:-self.n_radial_attributes]
         return data
 
+class AddTurbulentLabels(BaseTransform):
+    def forward(self, data: torch.Any) -> torch.Any:
+        data.y = torch.cat((data.y, torch.tensor(data.turbolence.values)), dim=1) # TODO: needs to betensor already in data
+        return data
 
 class SampleDomainPoints(BaseTransform):
     def __init__(self, full_conf) -> None:
