@@ -95,8 +95,9 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
             for i in range(len(batch)):
                 data = batch[i]
                 pred_sample_pressure = pred[batch.ptr[i]:batch.ptr[i+1], 2]
+                normalized_label = {key: 2*val/conf.air_speed**2 for key, val in data.force_on_component.items()}
                 metric_aero.forward(pred=get_forces(conf, data, pred_sample_pressure), 
-                                    label=data.force_on_component)
+                                    label=normalized_label)
                 
             batch.cpu()
 
