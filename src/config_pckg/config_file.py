@@ -5,6 +5,7 @@ import sys
 import pickle
 from typing import Annotated, Dict, Literal, Optional, TypedDict, Union
 import numpy as np
+import torch
 
 import yaml
 from pyvista import CellType 
@@ -62,12 +63,6 @@ class Config():
             except yaml.YAMLError as exc:
                 print(exc)
 
-        with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "bootstrap_bias.yaml"), "r") as stream:
-            try:
-                self.bootstrap_bias = yaml.safe_load(stream)
-            except yaml.YAMLError as exc:
-                print(exc)
-
         match mode:
             case None:
                 pass
@@ -100,6 +95,15 @@ class Config():
             'dp-dy',
             'turb-diss-rate',
             'turb-kinetic-energy',
+        ]
+
+        with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "train_label_stats.pkl"), "rb") as f:
+            self.dict_labels_train = pickle.load(f)
+
+        self.physical_labels = [
+            'x-velocity',
+            'y-velocity',
+            'pressure',
         ]
 
         self.labels_to_keep_for_training = [
@@ -206,10 +210,17 @@ class Config():
         self.feature_normalization_mode = "Physical"
 
         self.label_normalization_mode = {
-            "main": "Physical",                         # "None" or "Z-Normalization"
-            "velocity_mode": "magnitude_wise",          # "component_wise" or "magnitude_wise" (only needed if Z-norm is chosen)
-            "graph_wise": False,                        # True = dataset wise
-            "no_shift": True,                           # True = only rescales, doesn't shift values
+            "x-velocity": {
+                "main": "physical", # physical / max-normalization / standardization
+                "magnitude": True,
+            },
+            "y-velocity": {
+                "main": "physical",
+                "magnitude": True,
+            },
+            "pressure": {"main": "physical",},
+            "turb-diss-rate": {"main": "max-normalization",},
+            "turb-kinetic-energy": {"main": "max-normalization"},
         }
 
         # TODO: compute and fill these values (maybe in a file?)
@@ -242,13 +253,6 @@ class Config():
 
         self.metric_aero = metrics.AeroMetric()
 
-        self.metric_dict = {
-            metric_name:{
-                label_name : deepcopy(metric_obj) for label_name in self.labels_to_keep_for_training
-            }
-            for metric_name, metric_obj in self.metrics.items()}
-
-        self.bool_bootstrap_bias = True
 
         self.bool_radial_attributes = True
         if self.bool_radial_attributes:
@@ -260,9 +264,24 @@ class Config():
         if self.output_turbulence:
             self.labels_to_keep_for_training += self.labels_to_keep_for_training_turbulence
         self.output_dim = len(self.labels_to_keep_for_training)
+
+        self.activation_for_max_normalized_features = True
+        if self.activation_for_max_normalized_features:
+            self.idx_to_apply_activation = torch.tensor([True \
+                if self.label_normalization_mode.get(tmp, {}).get("main", "") == "max-normalization" else False\
+                for tmp in self.labels_to_keep_for_training])
+
+        self.metric_dict = {
+            metric_name:{
+                label_name : deepcopy(metric_obj) for label_name in self.labels_to_keep_for_training
+            }
+            for metric_name, metric_obj in self.metrics.items()}
+
+        self.bool_bootstrap_bias = True
+        self.bootstrap_bias = self.dict_labels_train["mean"][self.labels_to_keep_for_training]
         
         self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar", "turbulent_kw", "turbulent_kw_nu_t_derived"] \
-                                = "full_laminar"
+                                = "turbulent_kw"
         self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] = \
             "new_edges"
@@ -285,14 +304,14 @@ class Config():
 
         self.standard_weights = {
             "supervised": 1,
-            "continuity": 100,
+            "continuity": 1000,
             "boundary": 10,
             "supervised_on_sampled": 1,
-            "momentum_x": 1000,
-            "momentum_y": 1000,
+            "momentum_x": 1,
+            "momentum_y": 1,
         }
 
-        self.dynamic_loss_weights = True
+        self.dynamic_loss_weights = False
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"
         self.main_loss_component_dynamic = "supervised"
         self.lambda_dynamic_weights = 0.1 # NSFnets arXiv:2003.06496v1
@@ -313,7 +332,14 @@ class Config():
             "input_dim": self.input_dim,
             "output_dim": self.output_dim,
             "edge_feature_dim": len(self.graph_edge_attr_list),
+            "output_turbulence":self.output_turbulence,
             "label_dim": len(self.labels_to_keep_for_training),
+            "labels_to_keep_for_training": self.labels_to_keep_for_training,
+            "label_normalization_mode":self.label_normalization_mode,
+            "activation_for_max_normalized_features":self.activation_for_max_normalized_features,
+            "idx_to_apply_activation":self.idx_to_apply_activation,
+            "v_inlet":self.air_speed,
+            "dict_labels_train":self.dict_labels_train,
             "bool_bootstrap_bias": self.bool_bootstrap_bias,
             "bootstrap_bias": self.bootstrap_bias,
             "bool_radial_attributes": self.bool_radial_attributes,

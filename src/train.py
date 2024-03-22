@@ -94,7 +94,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
             
             for i in range(len(batch)):
                 data = batch[i]
-                pred_sample_pressure = pred[batch.ptr[i]:batch.ptr[i+1], -1]
+                pred_sample_pressure = pred[batch.ptr[i]:batch.ptr[i+1], 2]
                 metric_aero.forward(pred=get_forces(conf, data, pred_sample_pressure), 
                                     label=data.force_on_component)
                 
@@ -237,6 +237,7 @@ def train(
                         input("Press something to go onwards")
 
             total_loss += loss.item() * batch.num_graphs
+            # break
 
         total_loss /= len(train_loader.dataset)
         for k in total_loss_dict: total_loss_dict[k] /= len(train_loader.dataset)
@@ -270,7 +271,7 @@ def train(
             val_loss, metric_results = test(val_loader, model, conf, loss_weights)
             # torch.cuda.empty_cache()
 
-            metric = sum(metric_results["MAE"].values())
+            metric = sum([metric_results["MAE"][k] for k in conf.physical_labels])
             if metric < scheduler.best:
                 best_epoch = epoch
                 
@@ -310,7 +311,7 @@ def train(
             wandb.log({f"weight_{k}":v for k,v in loss_weights.items()}, epoch)
             wandb.log({f"reweighted_{k}":v for k,v in total_loss_dict_reweighted.items()}, epoch)
             for k in loss_dict:
-                loss_weights[k] = (1-conf.lambda_dynamic_weights) * loss_weights.get(k, 1) + \
+                loss_weights[k] = (1-conf.lambda_dynamic_weights) * loss_weights.get(k, conf.standard_weights.get(k, 1)/conf.gamma_loss) + \
                                     conf.lambda_dynamic_weights/conf.gamma_loss * (mean_grads[conf.main_loss_component_dynamic]/mean_grads[k])
 
     return model

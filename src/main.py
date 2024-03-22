@@ -143,9 +143,9 @@ if __name__ == "__main__":
             print(f"Test metrics: {metric_results}")
 
             if WANDB_FLAG:
+                final_metric = sum([metric_results["MAE"][k] for k in conf.physical_labels])
                 metric_results = {f"test_{k}":v for k,v in metric_results.items()}
                 metric_results.update({"test_loss":test_loss})
-                final_metric = sum(metric_results["MAE"].values())
                 metric_results.update({"test_metric":final_metric})
 
                 wandb.log(metric_results)
@@ -174,7 +174,8 @@ if __name__ == "__main__":
 
                 for i in range(len(batch)):
                     data = batch[i]
-                    pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
+                    pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :3] # remove non-physical labels?
+                    # TODO: print also turbolence
                     plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)
 
         # FIXME: doesn't work(?)

@@ -1,5 +1,5 @@
 training:
-  lr: 0.001
+  lr: 0.00001
   weight_decay: 0.0001
   n_epochs: 10000
   patience_reduce_lr: 200 # need to be divisible by "n_epochs_val" below

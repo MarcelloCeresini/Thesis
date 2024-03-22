@@ -24,6 +24,7 @@ from config_pckg.config_file import Config
 from loss_pckg.losses import MSE_loss
 from .model_utils import get_obj_from_structure, forward_for_general_layer
 from .layers import Simple_MLPConv
+from utils import normalize_labels
 
 def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Tensor]=None, value2: Optional[torch.Tensor]=None):
     points = np.stack([
@@ -283,17 +284,14 @@ class EPD_with_sampling(nn.Module):
         )
 
         if self.conf["hyperparams"].get("bool_bootstrap_bias",False):
-            new_bias = self.conf["hyperparams"]["bootstrap_bias"]
-            if self.conf["hyperparams"]["label_dim"] == 3:
-                ordered_bias = [new_bias["x-velocity"], new_bias["y-velocity"], new_bias["pressure"]]
-            elif self.conf["hyperparams"]["label_dim"] == 5:
-                ordered_bias = [new_bias["x-velocity"], new_bias["y-velocity"], new_bias["pressure"],
-                                new_bias['turb-kinetic-energy'], new_bias['turb-diss-rate']]
-            else:
-                raise ValueError("Not possible")
+            init_bias = normalize_labels(self.conf["hyperparams"]["bootstrap_bias"],\
+                self.conf["hyperparams"]["labels_to_keep_for_training"],
+                self.conf["hyperparams"]["label_normalization_mode"],
+                self.conf["hyperparams"]["v_inlet"],
+                self.conf["hyperparams"]["dict_labels_train"])
             with torch.no_grad():
                 self.decoder[-1].bias = nn.Parameter(
-                    torch.tensor(ordered_bias)
+                    torch.tensor(init_bias, dtype=torch.float32)
                 )
 
 
@@ -451,6 +449,16 @@ class EPD_with_sampling(nn.Module):
                     raise NotImplementedError("Not implemented")
 
             U_sampled = forward_for_general_layer(self.decoder, {"x": sampled_points_encoding.to(torch.float32)})
+
+            if self.conf["hyperparams"].get("activation_for_max_normalized_features",False):
+                if self.model_structure["decoder"].get("act_for_max_norm_feat", False) != False:
+                    activation = eval(self.model_structure["decoder"]["act_for_max_norm_feat"])()
+                    
+                    tmp = activation(U_sampled["x"][self.conf["hyperparams"]["idx_to_apply_activation"]])
+                    U_sampled["x"][self.conf["hyperparams"]["idx_to_apply_activation"]] = tmp
+                    tmp = activation(decoded["x"][:,self.conf["hyperparams"]["idx_to_apply_activation"]])
+                    decoded["x"][:,self.conf["hyperparams"]["idx_to_apply_activation"]] = tmp
+                
             return U_sampled["x"], decoded["x"]
         else:
             return decoded["x"]
@@ -654,14 +662,14 @@ class PINN(nn.Module):
                                         "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re,
                                         "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re,})
                 case "turbulent_kw":
-                    assert self.conf.output_turbulence, "Cannot use turbolent equations if you don't output turbulence"
+                    assert self.conf['hyperparams']["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
                     txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
                         u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True)
                     residuals.update({"continuity": (u_x + v_y),
                                         "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re + txx_x + txy_y,
                                         "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re + tyx_x + tyy_y,})
                 case "turbulent_kw_nu_t_derived":
-                    assert self.conf.output_turbulence, "Cannot use turbolent equations if you don't output turbulence"
+                    assert self.conf['hyperparams']["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
                     txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
                         u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=False)
                     residuals.update({"continuity": (u_x + v_y),

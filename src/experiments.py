@@ -125,6 +125,7 @@ if __name__ == "__main__":
 
     for batch in train_dataloader:
         batch.to(conf.device)
+        break
     # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
     y = model(**get_input_to_model(batch))
     # plt.show()

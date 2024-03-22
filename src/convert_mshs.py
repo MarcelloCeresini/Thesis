@@ -10,10 +10,10 @@ import torch
 from scipy.spatial import Delaunay
 
 from config_pckg.config_file import Config
-from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph
+from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph, get_forces
 
 
-def convert_all_msh_to_meshComplete(conf: Config(), output_dir: str, input_dir: Optional[str] = None, input_filenames: Optional[list[str]] = None):
+def convert_all_msh_to_meshComplete(conf: Config, output_dir: str, input_dir: Optional[str] = None, input_filenames: Optional[list[str]] = None):
 
     if input_dir is not None:
         input_filenames = glob.glob(os.path.join(input_dir, "*.msh"))
@@ -59,14 +59,14 @@ def get_triangulated_cells(vertices_in_cells, pos):
 if __name__ == "__main__":
     conf = Config()
 
-    #################### 1
+    #################### 1 convert_all_msh_to_meshComplete
     # meshComplete_objs = convert_all_msh_to_meshComplete(
     #     conf, 
     #     output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE,
     #     input_dir=conf.EXTERNAL_FOLDER_MSH, 
     # )
     
-    #################### 2
+    #################### 2 convert_all_meshComplete_to_labelled_meshComplete
     # input_filenames = glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE, "*.pkl"))
     # for filename in (pbar := tqdm(input_filenames)):
     #     with open(filename, "rb") as f:
@@ -81,18 +81,16 @@ if __name__ == "__main__":
     meshComplete_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, "*.pkl")))
     graph_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, "*.pt")))
     
-    for path_m, path_g in tqdm(zip(meshComplete_paths, graph_paths)):
+    for path_m, path_g in tqdm(zip(meshComplete_paths, graph_paths), total=len(meshComplete_paths)):
         # assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
-        with open(path_m, "rb") as f:
-            meshCI = pickle.load(f)
+        # with open(path_m, "rb") as f:
+        #     meshCI = pickle.load(f)
 
         data = torch.load(path_g)
-        # data.len_faces = torch.tensor([len(f) for f in data.faces_in_cell])
-        data.turbolence = meshCI.face_center_labels[["turb-kinetic-energy", "turb-diss-rate"]]
-
-        # data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
-        # tmp1, tmp2 = meshCI.get_triangulated_cells()
-        # data.triangulated_cells, data.idx_of_triangulated_cell = torch.tensor(tmp1), torch.tensor(tmp2)
+        # tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
+        # data.len_faces = torch.tensor([len(f) for f in tmp])
+        data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2])
+        # data2 = convert_mesh_complete_info_obj_to_graph(conf, meshCI)
         torch.save(data, path_g)
 
     print("REMEMBER TO COPY IT TO THE PC FOLDER")

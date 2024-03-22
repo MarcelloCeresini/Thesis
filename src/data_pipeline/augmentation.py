@@ -3,6 +3,22 @@ from torch_geometric.transforms import BaseTransform
 import torch_geometric.data as pyg_data
 
 from torch import vmap
+import numpy as np
+from utils import normalize_labels
+
+class NormalizeLabels(BaseTransform):
+    def __init__(self, conf) -> None:
+        super().__init__()
+        self.conf = conf
+
+    def forward(self, data: torch.Any) -> torch.Any:
+        data = normalize_labels(data, 
+            self.conf.labels_to_keep_for_training, 
+            self.conf.label_normalization_mode,
+            self.conf.air_speed,
+            self.conf.dict_labels_train)
+        return data
+
 
 class RemoveRadialAttributes(BaseTransform):
     def __init__(self, n_radial_attributes) -> None:
@@ -13,9 +29,9 @@ class RemoveRadialAttributes(BaseTransform):
         data.x = data.x[:,:-self.n_radial_attributes]
         return data
 
-class AddTurbulentLabels(BaseTransform):
+class RemoveTurbulentLabels(BaseTransform):
     def forward(self, data: torch.Any) -> torch.Any:
-        data.y = torch.cat((data.y, torch.tensor(data.turbolence.values)), dim=1) # TODO: needs to betensor already in data
+        data.y = data.y[:-2]
         return data
 
 class SampleDomainPoints(BaseTransform):

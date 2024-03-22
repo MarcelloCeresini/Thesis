@@ -442,60 +442,125 @@ def normalize_features(features, conf):
             raise NotImplementedError("Only implemented 'None' and 'Physical'")
 
 
-def normalize_labels(labels, conf_dict, conf):
-    labels = labels.copy()
-    # TODO: to use v_mag correctly, we should compute v_mag POINTWISE and then aggregate
-    # instead here we compute mean of x-v and y-v for each graph, then compute v_mag as norm (graph-wise)
-    v_mag = np.linalg.norm(labels[["x-velocity", "y-velocity"]], axis=1)
+def normalize_labels(data, 
+                        labels_to_keep_for_training, label_normalization_mode, v_inlet,
+                        dict_labels_train, ):
+    
+    if isinstance(data, pd.Series):
+        tmp = torch.tensor(data.values)
+    else: # graph
+        tmp = data.y.T
 
-    if conf_dict["graph_wise"]:
-        v_mag_mean, v_mag_std = v_mag.mean(), v_mag.std()
-        vx_mean, vx_std = labels["x-velocity"].mean(), labels["x-velocity"].std()
-        vy_mean, vy_std = labels["y-velocity"].mean(), labels["y-velocity"].std()
-        p_mean, p_std = labels["pressure"].mean(), labels["pressure"].std()
-    else: # else it is dataset_wise
-        v_mag_mean, v_mag_std = conf.train_set_normalization_constants["v_mag_mean"], conf.train_set_normalization_constants["v_mag_std"]
-        vx_mean, vx_std = conf.train_set_normalization_constants["vx_mean"], conf.train_set_normalization_constants["vx_std"]
-        vy_mean, vy_std = conf.train_set_normalization_constants["vy_mean"], conf.train_set_normalization_constants["vy_std"]
-        p_mean, p_std = conf.train_set_normalization_constants["p_mean"], conf.train_set_normalization_constants["p_std"]
+    for column, label in zip(tmp, labels_to_keep_for_training):
 
-    if conf_dict["no_shift"]:
-        v_mag_mean = 0
-        vx_mean = 0
-        vy_mean = 0
-        p_mean = 0
+        # TODO: maybe add a graph-wise norm?
+        match label_normalization_mode[label]["main"]:
+            case "physical":
+                if label in ["x-velocity", "y-velocity"]:
+                    column /= v_inlet
+                elif label == "pressure":
+                    column /= (v_inlet**2)/2
+                else:
+                    raise ValueError(f"Physical normalization no available for {label}")
+            case "max-normalization":
+                if (label in ["x-velocity", "y-velocity"]) and \
+                        label_normalization_mode[label].get("magnitude", False):
+                    column /= dict_labels_train["max_magnitude"]["v_mag"]
+                else:
+                    column /= dict_labels_train["max_magnitude"][label]
 
-    match conf_dict["main"]:
-        case "None":
-            return labels
-        case "Z-Normalization":
-            labels["pressure"] = (labels["pressure"]-p_mean)/p_std
-            match conf_dict["velocity_mode"]:
-                case "component_wise":
-                    labels["x-velocity"] = (labels["x-velocity"]-vx_mean)/vx_std
-                    labels["y-velocity"] = (labels["y-velocity"]-vy_mean)/vy_std
-                    return labels
-                case "magnitude_wise":
-                    v_mag_norm = (v_mag-v_mag_mean)/v_mag_std
-                    labels["x-velocity"] = (labels["x-velocity"]/v_mag)*v_mag_norm    # inside parentheses it becomes "versor component", then you renormalize it with the product
-                    labels["y-velocity"] = (labels["y-velocity"]/v_mag)*v_mag_norm
-                case _:
-                    raise NotImplementedError()
-            return labels
-        case "Physical":
-            labels[["x-velocity", "y-velocity"]] /= conf.air_speed
-            labels["pressure"] /= (conf.air_speed**2)/2
-            return labels
-        case _:
-            raise NotImplementedError()
+            case "standardization":
+                if (label in ["x-velocity", "y-velocity"]) and \
+                        label_normalization_mode[label].get("magnitude", False):
+                    column = (column-dict_labels_train["mean"]["v_mag"])/ \
+                        dict_labels_train["std"]["v_mag"]
+                else:
+                    column = (column-dict_labels_train["mean"][label])/ \
+                        dict_labels_train["std"][label]
+            case _:
+                raise NotImplementedError()
+    
+    if isinstance(data, pd.Series):
+        return tmp
+    else: # graph
+        data.y = tmp.T
+        return data
 
+        # if self.conf.label_normalization_mode["graph_wise"]:
+        #     v_mag = np.linalg.norm(data.y[["x-velocity", "y-velocity"]], axis=1)
+        #     v_mag_mean, v_mag_std = v_mag.mean(), v_mag.std()
+        #     vx_mean, vx_std = data.y["x-velocity"].mean(), data.y["x-velocity"].std()
+        #     vy_mean, vy_std = data.y["y-velocity"].mean(), data.y["y-velocity"].std()
+        #     p_mean, p_std = data.y["pressure"].mean(), data.y["pressure"].std()
+        # else: # else it is dataset_wise
+        #     v_mag_mean, v_mag_std = self.conf.dict_labels_train["mean"]["v_mag"], conf.train_set_normalization_constants["v_mag_std"]
+        #     vx_mean, vx_std = self.conf.dict_labels_train["mean"]["v_mag"], conf.train_set_normalization_constants["vx_std"]
+        #     vy_mean, vy_std = self.conf.dict_labels_train["mean"]["v_mag"], conf.train_set_normalization_constants["vy_std"]
+        #     p_mean, p_std = self.conf.dict_labels_train["mean"]["v_mag"], conf.train_set_normalization_constants["p_std"]
+
+        # if conf_dict["no_shift"]:
+        #     v_mag_mean = 0
+        #     vx_mean = 0
+        #     vy_mean = 0
+        #     p_mean = 0
+
+        # match conf_dict["main"]:
+        #     case "None":
+        #         return labels
+        #     case "Z-Normalization":
+        #         labels["pressure"] = (labels["pressure"]-p_mean)/p_std
+        #         match conf_dict["velocity_mode"]:
+        #             case "component_wise":
+        #                 labels["x-velocity"] = (labels["x-velocity"]-vx_mean)/vx_std
+        #                 labels["y-velocity"] = (labels["y-velocity"]-vy_mean)/vy_std
+        #                 return labels
+        #             case "magnitude_wise":
+        #                 v_mag_norm = (v_mag-v_mag_mean)/v_mag_std
+        #                 labels["x-velocity"] = (labels["x-velocity"]/v_mag)*v_mag_norm    # inside parentheses it becomes "versor component", then you renormalize it with the product
+        #                 labels["y-velocity"] = (labels["y-velocity"]/v_mag)*v_mag_norm
+        #             case _:
+        #                 raise NotImplementedError()
+        #         return labels
+        #     case "Physical":
+        #         labels[["x-velocity", "y-velocity"]] /= conf.air_speed
+        #         labels["pressure"] /= (conf.air_speed**2)/2
+        #         return labels
+        #     case _:
+        #         raise NotImplementedError()
 
 def denormalize_labels(labels, conf):
     '''
-    Only implemented for physical normalization for now
+    Connected to NormalizeLabels augmentation
     '''
-    labels[:,:2] *= conf.air_speed          # x-velocity and y-velocity
-    labels[:,2] *= (conf.air_speed**2)/2    # pressure
+    for column, label in zip(labels.T, conf.labels_to_keep_for_training):
+
+        # TODO: maybe add a graph-wise norm?
+        match conf.label_normalization_mode[label]["main"]:
+            case "physical":
+                if label in ["x-velocity", "y-velocity"]:
+                    column *= conf.air_speed
+                elif label == "pressure":
+                    column *= (conf.air_speed**2)/2
+                else:
+                    raise ValueError(f"Physical normalization no available for {label}")
+            case "max-normalization":
+                if (label in ["x-velocity", "y-velocity"]) and \
+                        conf.label_normalization_mode[label].get("magnitude", False):
+                    column *= conf.dict_labels_train["max_magnitude"]["v_mag"]
+                else:
+                    column *= conf.dict_labels_train["max_magnitude"][label]
+
+            case "standardization":
+                if (label in ["x-velocity", "y-velocity"]) and \
+                        conf.label_normalization_mode[label].get("magnitude", False):
+                    column = column*conf.dict_labels_train["std"]["v_mag"]+ \
+                                conf.dict_labels_train["mean"]["v_mag"]
+                else:
+                    column = column*conf.dict_labels_train["std"][label]+\
+                              conf.dict_labels_train["mean"][label]
+            case _:
+                raise NotImplementedError()
+        
     return labels
 
 
@@ -507,7 +572,7 @@ def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf, run_name
     print(f"Plotting {meshCI.name}")
     pred = denormalize_labels(pred, conf)
     meshCI.set_conf(conf)
-    meshCI.plot_mesh(labels=pred, run_name = run_name)
+    meshCI.plot_mesh(labels=pred, run_name = run_name, conf=conf)
 
 
 def get_inward_normal_areas(
@@ -913,6 +978,7 @@ class MeshCompleteInfo:
                 labels: Optional[torch.Tensor] = None,
                 run_name: Optional[str] = None,
                 return_meshes: Optional[bool] = None,
+                conf = None,
                 ):
         '''
         what_to_plot whould be a list of tuples (tup[0], tup[1], tup[2]):
@@ -975,7 +1041,7 @@ class MeshCompleteInfo:
 
         if labels is not None:
             # columns = self.conf.labels_to_keep_for_training # TODO: update all MeshComplete files from scratch
-            columns = ['x-velocity', 'y-velocity', 'pressure']
+            columns = conf.labels_to_keep_for_training
             face_pred_labels = pd.DataFrame(labels, columns=columns)
             cell_pred_lables = pd.DataFrame(
                 [np.mean(face_pred_labels.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
@@ -993,7 +1059,7 @@ class MeshCompleteInfo:
                 off_screen = True
             else:
                 off_screen = False
-            pl = pyvista.Plotter(shape=(3, 3), off_screen=off_screen)
+            pl = pyvista.Plotter(shape=(3, len(columns)), off_screen=off_screen)
             for i, lab in enumerate(columns):
                 pl.subplot(0,i)
                 pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab, 
@@ -1036,7 +1102,7 @@ class MeshCompleteInfo:
             else:
                 pl.show()
 
-            pl = pyvista.Plotter(shape=(3, 3), off_screen=off_screen)
+            pl = pyvista.Plotter(shape=(3, len(columns)), off_screen=off_screen)
             for i, lab in enumerate(columns):
                 pl.subplot(0,i)
                 pl.add_mesh(face_pyv_mesh.copy(), scalars=lab, 
@@ -1233,9 +1299,10 @@ def convert_mesh_complete_info_obj_to_graph(
             data.n_face_edges = torch.tensor(len(FcFc_edges_bidir))
             face_label_dim = len(conf.features_to_keep)
 
-            tmp = normalize_labels(meshCI.face_center_labels, conf.label_normalization_mode, conf)
+            tmp = meshCI.face_center_labels
             data.y = torch.tensor(tmp[conf.labels_to_keep_for_training].values, dtype=torch.float32)
             # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
+            # data.turbolence = torch.tensor(tmp[conf.labels_to_keep_for_training_turbulence].values, dtype=torch.float32)
 
             data.inward_normal_areas = torch.zeros((data.x.shape[0], 2))
 
@@ -1249,17 +1316,19 @@ def convert_mesh_complete_info_obj_to_graph(
                 cell_center_positions=meshCI.cell_center_positions,
                 face_center_positions=meshCI.face_center_positions,)
 
-            data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,-1])
+            data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2])
             data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
             tmp1, tmp2 = \
-                meshCI.get_triangulated_cells(meshCI.vertices_in_cells, meshCI.mesh.points, meshCI.faces_in_cells)
+                meshCI.get_triangulated_cells()
 
             data.triangulated_cells, data.idx_of_triangulated_cell = torch.tensor(tmp1), torch.tensor(tmp2)
+            
+            tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
             data.faces_in_cell = torch.nn.utils.rnn.pad_sequence(
-                [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)], 
+                tmp, 
                 padding_value=-1
             )
-            data.len_faces = torch.tensor([len(f) for f in data.faces_in_cell])
+            data.len_faces = torch.tensor([len(f) for f in tmp])
 
         else:
             raise NotImplementedError("Implement dim = 3")
