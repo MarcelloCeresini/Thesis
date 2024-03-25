@@ -1254,7 +1254,9 @@ def plot_continuity(pos: torch.Tensor, res: torch.Tensor):
     pointcloud = pyvista.PolyData(points)
     pointcloud.plot()
 
-
+def get_maximum_difference(labels_of_faces_in_cell):
+    sorted_labels = labels_of_faces_in_cell.sort(dim=0)[0]
+    return sorted_labels[-1,:] - sorted_labels[0,:]
 
 def convert_mesh_complete_info_obj_to_graph(
         conf:Config,
@@ -1318,9 +1320,8 @@ def convert_mesh_complete_info_obj_to_graph(
 
             data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2])
             data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
-            tmp1, tmp2 = \
-                meshCI.get_triangulated_cells()
-
+            
+            tmp1, tmp2 = meshCI.get_triangulated_cells()
             data.triangulated_cells, data.idx_of_triangulated_cell = torch.tensor(tmp1), torch.tensor(tmp2)
             
             tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
@@ -1329,6 +1330,11 @@ def convert_mesh_complete_info_obj_to_graph(
                 padding_value=-1
             )
             data.len_faces = torch.tensor([len(f) for f in tmp])
+
+            sampling_weights = torch.stack(
+                [get_maximum_difference(data.y[faces_in_cells]) for faces_in_cells in tmp])
+            
+            data.sampling_weights = sampling_weights # TODO: some cells could be "flat" --> do we wand to add an epsilon?
 
         else:
             raise NotImplementedError("Implement dim = 3")

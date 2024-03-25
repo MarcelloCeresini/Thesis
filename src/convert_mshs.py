@@ -56,6 +56,11 @@ def get_triangulated_cells(vertices_in_cells, pos):
     return np.stack(all_triangles)
 
 
+def get_maximum_difference(labels_of_faces_in_cell):
+    sorted_labels = labels_of_faces_in_cell.sort(dim=0)[0]
+    return sorted_labels[-1,:] - sorted_labels[0,:]
+
+
 if __name__ == "__main__":
     conf = Config()
 
@@ -87,9 +92,11 @@ if __name__ == "__main__":
         #     meshCI = pickle.load(f)
 
         data = torch.load(path_g)
-        # tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
+        tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
+        data.sampling_weights = torch.stack(
+            [get_maximum_difference(data.y[faces_in_cells]) for faces_in_cells in tmp])
         # data.len_faces = torch.tensor([len(f) for f in tmp])
-        data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2])
+        # data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2])
         # data2 = convert_mesh_complete_info_obj_to_graph(conf, meshCI)
         torch.save(data, path_g)
 

@@ -204,13 +204,6 @@ class EPD_with_sampling(nn.Module):
         if self.update_edges:
             self.edges_channels = self.model_structure["edges_channels"]
 
-        _, self.positional_encoder = get_obj_from_structure(
-            in_channels=2, 
-            str_d=model_structure["positional_encoder"],
-            conf=conf,
-            out_channels=model_structure["message_passer"]["out_channels"],
-        )
-
         current_dim, self.encoder = get_obj_from_structure(
             in_channels=input_dim, 
             str_d=model_structure["encoder"],
@@ -256,6 +249,13 @@ class EPD_with_sampling(nn.Module):
                 #     )
 
                 # input_dim += 2*self.conf["hyperparams"]["fourier_feat_dim"]
+            case "baseline_positional_encoder":
+                _, self.positional_encoder = get_obj_from_structure(
+                    in_channels=2, 
+                    str_d=model_structure["positional_encoder"],
+                    conf=conf,
+                    out_channels=model_structure["message_passer"]["out_channels"],
+                )
             case "new_edges":
                 current_dim, self.new_edges_msg_mlp = get_obj_from_structure(
                     in_channels=current_dim + self.conf["hyperparams"]["edge_feature_dim"], 
@@ -290,9 +290,11 @@ class EPD_with_sampling(nn.Module):
                 self.conf["hyperparams"]["v_inlet"],
                 self.conf["hyperparams"]["dict_labels_train"])
             with torch.no_grad():
-                self.decoder[-1].bias = nn.Parameter(
-                    torch.tensor(init_bias, dtype=torch.float32)
-                )
+                self.decoder[-1].bias = nn.Parameter(init_bias.to(torch.float32))
+
+        if self.conf["hyperparams"].get("activation_for_max_normalized_features",False):
+            if self.model_structure["decoder"].get("act_for_max_norm_feat", False) != False:
+                self.turbolence_activation = eval(self.model_structure["decoder"]["act_for_max_norm_feat"])()
 
 
     def get_fourier_pos_enc(self, x, learnable_matrix) -> torch.Tensor:
@@ -430,7 +432,7 @@ class EPD_with_sampling(nn.Module):
                             tmp_x, 
                             new_edge_attributes), 
                         dim=1))
-                    tmp_msg = tmp_x+tmp_msg
+                    tmp_msg = tmp_x + tmp_msg
                     aggregated_msg = tmp_msg.mean(dim=0)
                     aggregated_msg = self.new_edges_msg_activation(aggregated_msg)
                     update = self.new_edges_update_mlp(
@@ -452,18 +454,17 @@ class EPD_with_sampling(nn.Module):
 
             if self.conf["hyperparams"].get("activation_for_max_normalized_features",False):
                 if self.model_structure["decoder"].get("act_for_max_norm_feat", False) != False:
-                    activation = eval(self.model_structure["decoder"]["act_for_max_norm_feat"])()
                     
-                    tmp = activation(U_sampled["x"][self.conf["hyperparams"]["idx_to_apply_activation"]])
+                    tmp = self.turbolence_activation(U_sampled["x"][self.conf["hyperparams"]["idx_to_apply_activation"]])
                     U_sampled["x"][self.conf["hyperparams"]["idx_to_apply_activation"]] = tmp
-                    tmp = activation(decoded["x"][:,self.conf["hyperparams"]["idx_to_apply_activation"]])
+
+                    tmp = self.turbolence_activation(decoded["x"][:,self.conf["hyperparams"]["idx_to_apply_activation"]])
                     decoded["x"][:,self.conf["hyperparams"]["idx_to_apply_activation"]] = tmp
                 
             return U_sampled["x"], decoded["x"]
         else:
             return decoded["x"]
 
-            
     def loss(self, pred:torch.Tensor, label:torch.Tensor):
         return eval(self.conf["hyperparams"]["loss"])(pred, label)
 
@@ -529,6 +530,7 @@ class PINN(nn.Module):
     def get_stress_tensors(self, k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
                                             u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True):
         '''tij = k/w * (dui/dxj + duj/dxi) - (2/3)*k*delta_cronecker(i,j)'''
+        w = torch.clamp(w, min=1e-8)
         if as_solver:
             nu_t = k/w
             txx_x = 2*(nu_t*u_xx - k_x/3)
@@ -580,7 +582,7 @@ class PINN(nn.Module):
 
         sampling_points = torch.concatenate((domain_sampling_points, boundary_sampling_points))
         new_edges = torch.cat((
-            new_edges, 
+            new_edges,
             idxs_boundary_sampled.view(-1,1).repeat(1,3)))
         domain_slice = torch.arange(n_domain_points)
         boundary_slice = torch.arange(start=n_domain_points, end=n_domain_points+n_boundary_points)
@@ -594,9 +596,7 @@ class PINN(nn.Module):
         # plt.scatter(a[:,0], a[:,1], color="b")
         # plt.scatter(b[:,0], b[:,1], color="r")
 
-
         def compute_output(sampling_points, new_edges):
-            
             # if the distance goes to zero, the grad on the norm goes to NaN (because of the derivative of the sqrt)
             dist = (pos[new_edges, :2]-sampling_points).clamp(min=1e-7) 
             norm = torch.linalg.norm(dist, dim=1, keepdim=True)
@@ -611,6 +611,13 @@ class PINN(nn.Module):
 
 
         def compute_first_derivative(sampling_points, new_edges):
+            '''
+            https://pytorch.org/tutorials/intermediate/jacobians_hessians.html
+            
+            jacfwd and jacrev can be substituted for each other but they have different performance characteristics.
+            As a general rule of thumb, if you’re computing the jacobian of an R^N -> R^M function, and there are 
+            many more outputs than inputs (for example, M>N) then jacfwd is preferred, otherwise use jacrev.
+            '''
             grads_samp, (out_samp, out_sup) = \
                 jacrev(compute_output, has_aux=True, argnums=0)(sampling_points, new_edges)
             return grads_samp, (grads_samp, out_samp, out_sup)
@@ -786,9 +793,8 @@ class PINN(nn.Module):
             else:
                 gt_in_sampled = torch.stack((x_vel, y_vel, press, k_turb, w_turb), dim=1)/normalization_const.view(-1,1)
 
-            # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,0], data.pos[:,:2], data.y[:,0])
-            # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,1], data.pos[:,:2], data.y[:,1])
-            # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,2], data.pos[:,:2], data.y[:,2])
+            # i=0   # 0,1,2,3,4
+            # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,i], data.pos[:,:2], data.y[:,i])
             # plot_PYVISTA(data.pos[:,:2], data.y[:,0])
 
             ### WITHOUT WEIGHTS (squared distance)

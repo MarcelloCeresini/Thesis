@@ -225,6 +225,7 @@ def train(
                     loss = sum(loss_dict[k] for k in loss_dict)
             
             loss.backward()
+            torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=10, foreach=True)
             opt.step()
             batch.cpu()
 

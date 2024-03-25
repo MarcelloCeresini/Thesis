@@ -125,12 +125,13 @@ if __name__ == "__main__":
 
     for batch in train_dataloader:
         batch.to(conf.device)
-        break
     # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
-    y = model(**get_input_to_model(batch))
-    # plt.show()
-    loss = model.loss(y, batch.y, batch)
-    loss[0].backward()
-    opt.step()
+        y = model(**get_input_to_model(batch))
+        # plt.show()
+        loss = model.loss(y, batch.y, batch)
+        loss[0].backward()
+        torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=10, foreach=True)
+        opt.step()
+        break
     model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
     print(model_summary)

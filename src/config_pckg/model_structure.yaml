@@ -73,7 +73,7 @@ new_edges_mlp:
 
 decoder:
   type: sequential_model
-  act_for_max_norm_feat: Softplus # Sigmoid, ReLU, Softplus
+  act_for_max_norm_feat: ReLU # Sigmoid, ReLU, Softplus
   layers: 
     # - {type: layer, name: Linear, out_features: 128}
     # - {type: layer, name: Softplus}

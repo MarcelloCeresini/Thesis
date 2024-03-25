@@ -103,7 +103,7 @@ if __name__ == "__main__":
 
         print_w_time("GETTING DATALOADERS")
         train_dataloader, val_dataloader, test_dataloader = \
-            get_data_loaders(conf, n_workers=0)
+            get_data_loaders(conf, n_workers=8)
         print_memory_state_gpu("After DataLoaders", conf)
 
         print_w_time("BUILDING MODEL")

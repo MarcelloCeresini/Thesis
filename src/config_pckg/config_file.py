@@ -291,22 +291,23 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.7}
+                                    "percentage": 0.5}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "percentage_of_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
-                                    "percentage": 0.7,
+                                    "percentage": 0.9,
                                     "shift_on_face":True}
 
-        self.general_sampling = {"add_edges": True,}
+        self.general_sampling = {"add_edges": True,
+                                    "use_sampling_weights":False}
         self.n_sampled_new_edges = 3
 
         self.standard_weights = {
             "supervised": 1,
-            "continuity": 1000,
-            "boundary": 10,
             "supervised_on_sampled": 1,
+            "boundary": 10,
+            "continuity": 1000,
             "momentum_x": 1,
             "momentum_y": 1,
         }
@@ -354,6 +355,7 @@ class Config():
             "graph_sampling_p_for_interpolation": self.graph_sampling_p_for_interpolation,
             "fourier_feat_dim": self.fourier_feat_dim,
             "n_sampled_new_edges": self.n_sampled_new_edges,
+            "standard_weights": self.standard_weights,
         })
 
         return_dict = {
