@@ -296,11 +296,11 @@ class Config():
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "percentage_of_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
-                                    "percentage": 0.9,
+                                    "percentage": 3,
                                     "shift_on_face":True}
 
         self.general_sampling = {"add_edges": True,
-                                    "use_sampling_weights":False}
+                                    "use_sampling_weights":True}
         self.n_sampled_new_edges = 3
 
         self.standard_weights = {
@@ -308,8 +308,8 @@ class Config():
             "supervised_on_sampled": 1,
             "boundary": 10,
             "continuity": 1000,
-            "momentum_x": 1,
-            "momentum_y": 1,
+            "momentum_x": 10,
+            "momentum_y": 10,
         }
 
         self.dynamic_loss_weights = False
