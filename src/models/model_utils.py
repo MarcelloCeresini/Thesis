@@ -4,7 +4,7 @@ from typing import Optional
 import torch.nn as nn
 import torch_geometric.nn as pyg_nn
 
-from torch.nn import Linear, ReLU, Sequential, LeakyReLU, Softplus
+from torch.nn import Linear, ReLU, Sequential, LeakyReLU, Softplus, Tanhshrink
 from torch_geometric.nn import GCNConv, NNConv
 from math import ceil
 
@@ -39,6 +39,9 @@ def get_obj_from_structure(
                     return in_channels, obj
                 case "Softplus":
                     obj = Softplus()
+                    return in_channels, obj
+                case "Tanhshrink":
+                    obj = Tanhshrink()
                     return in_channels, obj
                 case _:
                     raise NotImplementedError()
