@@ -78,7 +78,6 @@ class SampleDomainPoints(BaseTransform):
                 if self.general_sampling.get("use_sampling_weights", False): 
                     # all of the sampling points then train on all labels, but the placement of the points is chosen
                     # with an equally distributed number of samples for each label 
-                    idxs_domain_sampled_triangs = []
                     num_samples_per_label = num_samples // self.num_labels
                     num_samples = num_samples_per_label * self.num_labels
 
@@ -88,12 +87,7 @@ class SampleDomainPoints(BaseTransform):
                         lambda x: torch.multinomial(x[data.idx_of_triangulated_cell], 
                                                         num_samples_per_label, 
                                                         replacement = (p/self.num_labels)>=1),
-                        in_dims=(1))(data.sampling_weights)
-                    # idxs_domain_sampled_triangs.append(
-                    #     torch.multinomial(data.sampling_weights[data.idx_of_triangulated_cell, i], 
-                    #                         num_samples_per_label, 
-                    #                         replacement = (p/self.num_labels)>=1))
-                    idxs_domain_sampled_triangs = torch.concat(idxs_domain_sampled_triangs)
+                        in_dims=(1), randomness="different")(data.sampling_weights).view(-1)
                 else:
                     idxs_domain_sampled_triangs = \
                         torch.multinomial(torch.ones(data.triangulated_cells.shape[0], dtype=torch.float), 

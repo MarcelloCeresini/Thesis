@@ -26,7 +26,7 @@ from .model_utils import get_obj_from_structure, forward_for_general_layer
 from .layers import Simple_MLPConv
 from utils import normalize_labels
 
-def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Tensor]=None, value2: Optional[torch.Tensor]=None):
+def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Tensor]=None, value2: Optional[torch.Tensor]=None, point_size=10):
     points = np.stack([
         pos[:,0].detach().cpu().numpy(), 
         pos[:,1].detach().cpu().numpy(), 
@@ -42,7 +42,8 @@ def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Te
     pl.add_points(
         points,
         scalars = np.zeros(points.shape[0]),
-        style='points',)
+        style='points',
+        point_size=point_size,)
     
     if pos2 is not None:
         points2 = np.stack([
@@ -54,7 +55,8 @@ def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Te
         pl.add_points(
             points2,
             scalars = np.ones(points2.shape[0]),
-            style='points',)
+            style='points',
+            point_size=point_size,)
     
     pl.show()
 
@@ -530,18 +532,20 @@ class PINN(nn.Module):
     def get_stress_tensors(self, k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
                                             u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True):
         '''tij = k/w * (dui/dxj + duj/dxi) - (2/3)*k*delta_cronecker(i,j)'''
-        w = torch.clamp(w, min=1e-8)
         if as_solver:
-            nu_t = k/w
+            w_clamped = torch.clamp(w, min=1e-8)
+            nu_t = k/w_clamped
             txx_x = 2*(nu_t*u_xx - k_x/3)
             txy_y = nu_t*(u_yy+v_xy)
             tyx_x = nu_t*(v_xx+u_yx)
             tyy_y = 2*(nu_t*v_yy - k_y/3)
         else:
-            txx_x = 2*((k_x*u_x+k*u_xx)/w - k*u_x*w_x/w**2 - k_x/3)
-            txy_y = (k_y*(u_y+v_x) + k*(u_yy+v_xy))/w - (u_y+v_x)*k*w_y/w**2
-            tyx_x = (k_x*(v_x+u_y) + k*(v_xx+u_yx))/w - (v_x+u_y)*k*w_x/w**2
-            tyy_y = 2*((k_y*v_y+k*v_yy)/w - k*v_y*w_y/w**2 - k_y/3)
+            raise NotImplementedError("Look if this clamp is ok")
+            w_clamped = torch.clamp(w, min=1e-4)
+            txx_x = 2*((k_x*u_x+k*u_xx)/w_clamped - k*u_x*w_x/w_clamped**2 - k_x/3)
+            txy_y = (k_y*(u_y+v_x) + k*(u_yy+v_xy))/w_clamped - (u_y+v_x)*k*w_y/w_clamped**2
+            tyx_x = (k_x*(v_x+u_y) + k*(v_xx+u_yx))/w_clamped - (v_x+u_y)*k*w_x/w_clamped**2
+            tyy_y = 2*((k_y*v_y+k*v_yy)/w_clamped - k*v_y*w_y/w_clamped**2 - k_y/3)
         return txx_x, txy_y, tyx_x, tyy_y
 
 
