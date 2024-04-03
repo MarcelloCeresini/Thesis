@@ -4,6 +4,7 @@ import torch_geometric.data as pyg_data
 
 from torch import vmap
 import numpy as np
+import wandb
 from utils import normalize_labels
 
 class NormalizeLabels(BaseTransform):
@@ -12,18 +13,14 @@ class NormalizeLabels(BaseTransform):
         self.conf = conf
 
     def forward(self, data: torch.Any) -> torch.Any:
-        data = normalize_labels(data, 
-            self.conf.labels_to_keep_for_training, 
-            self.conf.label_normalization_mode,
-            self.conf.air_speed,
-            self.conf.dict_labels_train)
+        data = normalize_labels(data, self.conf)
         return data
 
 
 class RemoveRadialAttributes(BaseTransform):
-    def __init__(self, n_radial_attributes) -> None:
+    def __init__(self, conf) -> None:
         super().__init__()
-        self.n_radial_attributes = n_radial_attributes
+        self.n_radial_attributes = conf["n_radial_attributes"]
 
     def forward(self, data: torch.Any) -> torch.Any:
         data.x = data.x[:,:-self.n_radial_attributes]
@@ -35,12 +32,12 @@ class RemoveTurbulentLabels(BaseTransform):
         return data
 
 class SampleDomainPoints(BaseTransform):
-    def __init__(self, full_conf) -> None:
+    def __init__(self, conf) -> None:
         super().__init__()
-        self.full_conf = full_conf
-        self.domain_sampling = self.full_conf["hyperparams"]["domain_sampling"]
-        self.general_sampling = self.full_conf["hyperparams"]["general_sampling"]
-        self.num_labels = self.full_conf["hyperparams"]["output_dim"]
+        self.domain_sampling = conf["domain_sampling"]
+        self.general_sampling = conf["general_sampling"]
+        self.num_labels = conf["output_dim"]
+        self.n_sampled_new_edges = conf["n_sampled_new_edges"]
 
     def get_random_position_in_simplex(self, spatial_positions):
         '''Uniform sampling inside simplex --> each coordinate is the linear combination of
@@ -117,8 +114,8 @@ class SampleDomainPoints(BaseTransform):
 
                     k_sampled_faces_idxs = torch.multinomial(
                         mask.to(torch.float32).T, 
-                        num_samples=self.full_conf["hyperparams"]["n_sampled_new_edges"], 
-                        replacement=self.full_conf["hyperparams"]["n_sampled_new_edges"]>3)
+                        num_samples=self.n_sampled_new_edges, 
+                        replacement=self.n_sampled_new_edges>3)
 
                     k_sampled_faces = torch.gather(sampled_padded_faces.T, dim=1, index=k_sampled_faces_idxs)
 
@@ -171,15 +168,15 @@ class SampleDomainPoints(BaseTransform):
 
 
 class SampleBoundaryPoints(BaseTransform):
-    def __init__(self, full_conf) -> None:
+    def __init__(self, conf) -> None:
         super().__init__()
-        self.full_conf = full_conf
-        self.boundary_sampling = self.full_conf["hyperparams"]["boundary_sampling"]
+        self.boundary_sampling = conf["boundary_sampling"]
+        self.feat_dict = conf["graph_node_feature_dict"]
 
     def get_random_position_on_face(self, x, pos):
-        tangent_versor_x = x[self.full_conf["hyperparams"]["feat_dict"]["tangent_versor_x"]]
-        tangent_versor_y = x[self.full_conf["hyperparams"]["feat_dict"]["tangent_versor_y"]]
-        face_area = x[self.full_conf["hyperparams"]["feat_dict"]["face_area"]]
+        tangent_versor_x = x[self.feat_dict["tangent_versor_x"]]
+        tangent_versor_y = x[self.feat_dict["tangent_versor_y"]]
+        face_area = x[self.feat_dict["face_area"]]
 
         lb_x = pos[0] - (tangent_versor_x*face_area)/2
         ub_x = pos[0] + (tangent_versor_x*face_area)/2

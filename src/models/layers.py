@@ -12,7 +12,7 @@ from torch_geometric.nn.aggr import Aggregation
 import torch_geometric.utils as pyg_utils
 import torch_geometric.transforms as T
 
-from torch_scatter.composite import scatter_softmax
+# from torch_scatter.composite import scatter_softmax
 
 class MLPConv(pyg_nn.MessagePassing):
     def __init__(self, 

@@ -1,13 +1,18 @@
+### FOR CUDA, need to give trusted-host
 # run by hand: pip install torch --index-url https://download.pytorch.org/whl/cu121 --trusted-host download.pytorch.org
 # run by hand: pip install torch_scatter torch_sparse torch_cluster torch_spline_conv -f https://data.pyg.org/whl/torch-2.2.0+cu121.html --trusted-host data.pyg.org
-pyyaml
-pydantic
-wandb
+
+### PROBLEMATIC LIBRARY ###
 torch_geometric==2.4.0
 # CHANGE THIS LINE IN THIS FILE:
 # Lib\site-packages\torch_geometric\nn\conv\message_passing.py, line 319
 # from  "data = kwargs.get(arg[:-2], Parameter.empty)"
 # to    "data = kwargs.get(arg, Parameter.empty)"
+
+# NORMAL LIBRARIES
+pyyaml
+pydantic
+wandb
 pyvista
 toughio
 matplotlib

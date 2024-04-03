@@ -30,7 +30,6 @@ def get_training_data(run_name, conf, from_checkpoints:bool):
     with open(os.path.join(conf.DATA_DIR, "model_runs", run_name+"_full_conf.pkl"), "rb") as f:
         model_conf = torch.load(f)
 
-    # model_conf["hyperparams"]["general_sampling"] = {"add_edges":True}
     model = get_model_instance(model_conf)
 
     if not from_checkpoints:
@@ -76,6 +75,23 @@ def plot_test_images_from_last_run(conf, model, run_name, test_dataloader):
             plot_gt_pred_label_comparison(data, pred.detach().numpy(), conf, run_name=os.path.basename(run_name))
 
 
+def get_run_from_id(run_id):
+    wandb.init(id=run_id, resume="must")
+    conf = wandb.config
+
+    dirlist = glob.glob(os.path.join(conf.DATA_DIR, "model_runs", "*.pt"))
+    run_names = [v.split(os.sep)[-1] for v in dirlist]
+    run_ids = [v.split("-")[-1].split(".")[0] for v in run_names]
+
+    raise NotImplementedError("complete this")
+    if run_id in run_ids:
+        pass
+        
+        # model, model_conf = get_training_data(run_name, wandb.conf, from_checkpoints=from_checkpoints)
+    else:
+        pass
+
+
 def add_test_results_from_last_checkpoint(conf, test_dataloader):
     model, model_conf, run_name = get_last_training(conf, from_checkpoints=True)
 
@@ -92,14 +108,16 @@ def add_test_results_from_last_checkpoint(conf, test_dataloader):
         wandb.log(metric_results)
 
         plot_test_images_from_last_run(conf, model, run_name, test_dataloader)
-        
-if __name__ == "__main__":
-    conf = Config()
 
-    print("Getting dataloaders")
-    train_dataloader, val_dataloader, test_dataloader = \
-        get_data_loaders(conf, n_workers=0)
-    print("done")
+
+if __name__ == "__main__":
+    get_run_from_id("2awfxt5j")
+    # conf = Config()
+    # utils.init_wandb(Config(), overwrite_WANDB_MODE="offline")
+    # conf = wandb.config
+    # print("Getting dataloaders")
+    # train_dataloader, val_dataloader, test_dataloader = get_data_loaders(conf)
+    # print("done")
 
     # model, model_conf, run_name = get_last_training(conf)
     ####### print results of last training

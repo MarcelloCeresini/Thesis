@@ -11,9 +11,9 @@ import torch_geometric.data as pyg_data
 import torch_geometric.utils as pyg_utils
 import torch_geometric.transforms as T
 
-from torch.nn import Linear, ReLU, Softplus
+from torch.nn import Linear, ReLU, Softplus, Tanhshrink
 from torch_geometric.nn import GCNConv
-from torch_scatter import scatter_mean
+# from torch_scatter import scatter_mean
 from torch.func import functional_call, vmap, jacrev, hessian
 
 from scipy.spatial import Delaunay
@@ -26,22 +26,27 @@ from .model_utils import get_obj_from_structure, forward_for_general_layer
 from .layers import Simple_MLPConv
 from utils import normalize_labels
 
-def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Tensor]=None, value2: Optional[torch.Tensor]=None, point_size=10):
+def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Tensor]=None, value2: Optional[torch.Tensor]=None, rescale_z=False, point_size=3):
     points = np.stack([
         pos[:,0].detach().cpu().numpy(), 
         pos[:,1].detach().cpu().numpy(), 
         value.detach().cpu().numpy()]).T
     
-    # range_x = points[:,0].max() - points[:,0].min()
-    # range_y = points[:,1].max() - points[:,1].min()
-    # range_z = points[:,2].max() - points[:,2].min()
+    if rescale_z:
+        range_x = points[:,0].max() - points[:,0].min()
+        range_y = points[:,1].max() - points[:,1].min()
+        range_z = points[:,2].max() - points[:,2].min()
 
-    # points[:,2] = points[:,2]
+        points[:,2] = points[:,2]/range_z*max(range_x, range_y)
 
+    if pos2 is None:
+        scalars = points[:,2]
+    else:
+        scalars = np.zeros(points.shape[0])
     pl = pyvista.Plotter()
     pl.add_points(
         points,
-        scalars = np.zeros(points.shape[0]),
+        scalars=scalars,
         style='points',
         point_size=point_size,)
     
@@ -57,20 +62,21 @@ def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Te
             scalars = np.ones(points2.shape[0]),
             style='points',
             point_size=point_size,)
+
+    return pl
+
+
+def get_model_instance(conf):
     
-    pl.show()
-
-
-def get_model_instance(model_conf):
-    net = eval(model_conf["model"]["name"])(
-        input_dim = model_conf["hyperparams"]["input_dim"],
-        output_dim = model_conf["hyperparams"]["output_dim"],
-        model_structure = model_conf["model"],
-        conf = model_conf
+    net = eval(conf["model_structure"]["name"])(
+        input_dim = conf["input_dim"],
+        output_dim = conf["output_dim"],
+        model_structure = conf["model_structure"],
+        conf = conf
     )
 
-    if model_conf["model"]["PINN"] == True:
-        return PINN(net=net, conf=model_conf)
+    if conf["model_structure"]["PINN"] == True:
+        return PINN(net=net, conf=conf)
     else:
         return net
 
@@ -98,7 +104,7 @@ class EncodeProcessDecode_Baseline(nn.Module):
         message_passer_structure = model_structure["message_passer"]
         if self.update_edges:
             _, self.edge_encoder = get_obj_from_structure(
-                in_channels=conf["hyperparams"]["edge_feature_dim"], 
+                in_channels=conf["edge_feature_dim"], 
                 str_d=model_structure["edge_encoder"],
                 conf=conf,
                 out_channels=self.edges_channels
@@ -188,8 +194,7 @@ class EncodeProcessDecode_Baseline(nn.Module):
 
 
     def loss(self, pred:torch.Tensor, label:torch.Tensor):
-        return eval(self.conf["hyperparams"]["loss"])(pred, label)
-
+        return eval(self.conf["hyper_params"]["loss"])(pred, label)
 
 
 class EPD_with_sampling(nn.Module):
@@ -201,7 +206,7 @@ class EPD_with_sampling(nn.Module):
         self.conf = conf
         self.model_structure = model_structure
         self.add_self_loops = self.model_structure["add_self_loops"]
-        self.update_edges = self.model_structure["update_edges"] if "update_edges" in self.model_structure.keys() else False
+        self.update_edges = self.model_structure.get("update_edges", False)
         
         if self.update_edges:
             self.edges_channels = self.model_structure["edges_channels"]
@@ -216,7 +221,7 @@ class EPD_with_sampling(nn.Module):
         message_passer_structure = model_structure["message_passer"]
         if self.update_edges:
             _, self.edge_encoder = get_obj_from_structure(
-                in_channels=conf["hyperparams"]["edge_feature_dim"], 
+                in_channels=conf["edge_feature_dim"], 
                 str_d=model_structure["edge_encoder"],
                 conf=conf,
                 out_channels=self.edges_channels
@@ -236,14 +241,14 @@ class EPD_with_sampling(nn.Module):
         )
         
         self.use_fourier_features = False
-        match self.conf["hyperparams"]["inference_mode_latent_sampled_points"]:
+        match self.conf["inference_mode_latent_sampled_points"]:
             case "squared_distance":
-                self.graph_sampling_p_for_interpolation = self.conf["hyperparams"]["graph_sampling_p_for_interpolation"]
+                self.graph_sampling_p_for_interpolation = self.conf["graph_sampling_p_for_interpolation"]
             case "fourier_features":
                 self.use_fourier_features = True
                 self.fourier_pos_enc_matrix = torch.nn.Parameter(
                     torch.nn.init.normal_(
-                        tensor=torch.zeros(2, self.conf["hyperparams"]["fourier_feat_dim"]), 
+                        tensor=torch.zeros(2, self.conf["fourier_feat_dim"]), 
                             mean=0, std=1e-2
                     ))
                 # self.fourier_pos_enc_matrix = torch.nn.Parameter(
@@ -260,7 +265,7 @@ class EPD_with_sampling(nn.Module):
                 )
             case "new_edges":
                 current_dim, self.new_edges_msg_mlp = get_obj_from_structure(
-                    in_channels=current_dim + self.conf["hyperparams"]["edge_feature_dim"], 
+                    in_channels=current_dim + self.conf["edge_feature_dim"], 
                     str_d=model_structure["new_edges_mlp"]["msg_mlp"], 
                     conf=conf,
                     out_channels=current_dim,
@@ -285,16 +290,12 @@ class EPD_with_sampling(nn.Module):
             out_channels=output_dim,
         )
 
-        if self.conf["hyperparams"].get("bool_bootstrap_bias",False):
-            init_bias = normalize_labels(self.conf["hyperparams"]["bootstrap_bias"],\
-                self.conf["hyperparams"]["labels_to_keep_for_training"],
-                self.conf["hyperparams"]["label_normalization_mode"],
-                self.conf["hyperparams"]["v_inlet"],
-                self.conf["hyperparams"]["dict_labels_train"])
+        if self.conf.get("bool_bootstrap_bias",False):
+            init_bias = normalize_labels(self.conf["bootstrap_bias"],self.conf)
             with torch.no_grad():
                 self.decoder[-1].bias = nn.Parameter(init_bias.to(torch.float32))
 
-        if self.conf["hyperparams"].get("activation_for_max_normalized_features",False):
+        if self.conf.get("activation_for_max_normalized_features",False):
             if self.model_structure["decoder"].get("act_for_max_norm_feat", False) != False:
                 self.turbolence_activation = eval(self.model_structure["decoder"]["act_for_max_norm_feat"])()
 
@@ -369,7 +370,7 @@ class EPD_with_sampling(nn.Module):
         
         if sampling_points is not None:
 
-            match self.conf["hyperparams"]["inference_mode_latent_sampled_points"]:
+            match self.conf["inference_mode_latent_sampled_points"]:
                 case "squared_distance":
                     # FIXME: we NEED knn to be scalable, but with functional_call+vmap it doesn't work
                     # positional_encoding_graph_points = self.positional_encoder(pos)
@@ -454,21 +455,21 @@ class EPD_with_sampling(nn.Module):
 
             U_sampled = forward_for_general_layer(self.decoder, {"x": sampled_points_encoding.to(torch.float32)})
 
-            if self.conf["hyperparams"].get("activation_for_max_normalized_features",False):
+            if self.conf.get("activation_for_max_normalized_features",False):
                 if self.model_structure["decoder"].get("act_for_max_norm_feat", False) != False:
                     
-                    tmp = self.turbolence_activation(U_sampled["x"][self.conf["hyperparams"]["idx_to_apply_activation"]])
-                    U_sampled["x"][self.conf["hyperparams"]["idx_to_apply_activation"]] = tmp
+                    tmp = self.turbolence_activation(U_sampled["x"][self.conf["idx_to_apply_activation"]])
+                    U_sampled["x"][self.conf["idx_to_apply_activation"]] = tmp
 
-                    tmp = self.turbolence_activation(decoded["x"][:,self.conf["hyperparams"]["idx_to_apply_activation"]])
-                    decoded["x"][:,self.conf["hyperparams"]["idx_to_apply_activation"]] = tmp
+                    tmp = self.turbolence_activation(decoded["x"][:,self.conf["idx_to_apply_activation"]])
+                    decoded["x"][:,self.conf["idx_to_apply_activation"]] = tmp
                 
             return U_sampled["x"], decoded["x"]
         else:
             return decoded["x"]
 
     def loss(self, pred:torch.Tensor, label:torch.Tensor):
-        return eval(self.conf["hyperparams"]["loss"])(pred, label)
+        return eval(self.conf["hyper_params"]["loss"])(pred, label)
 
 
 class PINN(nn.Module):
@@ -480,16 +481,16 @@ class PINN(nn.Module):
         self.net = net
         self.conf = conf
 
-        self.domain_sampling = self.conf["hyperparams"]["domain_sampling"]
-        self.boundary_sampling = self.conf["hyperparams"]["boundary_sampling"]
+        self.domain_sampling = self.conf["domain_sampling"]
+        self.boundary_sampling = self.conf["boundary_sampling"]
 
         self.Re = 1/(1.45e-5) # V_char=1, L_char=1
         self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
 
 
     def get_BC_residuals_single_sample(self, x, x_mask, u, v, p, u_x, v_y, p_x, p_y):
-        feat_dict = self.conf['hyperparams']["feat_dict"]
-        mask_dict = self.conf['hyperparams']["mask_dict"]
+        feat_dict = self.conf["graph_node_feature_dict"]
+        mask_dict = self.conf["graph_node_feature_mask"]
 
         mask_dict_copy = mask_dict.copy()
         mask_dict_copy.pop("is_BC")
@@ -653,7 +654,7 @@ class PINN(nn.Module):
                         u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy
 
         def get_domain_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
-            if not "turbulent_kw" in self.conf['hyperparams']["PINN_mode"]:
+            if not "turbulent_kw" in self.conf["PINN_mode"]:
                 u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
                     slice_idxs, hess_samp, grads_samp, out_samp, turbolence=False)
             else:
@@ -663,7 +664,7 @@ class PINN(nn.Module):
                     slice_idxs, hess_samp, grads_samp, out_samp, turbolence=True)
 
             residuals = {}
-            match self.conf['hyperparams']["PINN_mode"]:
+            match self.conf["PINN_mode"]:
                 case "supervised_only":
                     pass
                 case "continuity_only":
@@ -673,21 +674,21 @@ class PINN(nn.Module):
                                         "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re,
                                         "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re,})
                 case "turbulent_kw":
-                    assert self.conf['hyperparams']["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
+                    assert self.conf["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
                     txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
                         u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True)
                     residuals.update({"continuity": (u_x + v_y),
                                         "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re + txx_x + txy_y,
                                         "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re + tyx_x + tyy_y,})
                 case "turbulent_kw_nu_t_derived":
-                    assert self.conf['hyperparams']["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
+                    assert self.conf["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
                     txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
                         u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=False)
                     residuals.update({"continuity": (u_x + v_y),
                                         "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re + txx_x + txy_y,
                                         "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re + tyx_x + tyy_y,})
                 case _:
-                    raise NotImplementedError(f"{self.conf['hyperparams']['PINN_mode']} is not implemented yet")
+                    raise NotImplementedError(f"{self.conf['PINN_mode']} is not implemented yet")
             
             return residuals
 
@@ -695,7 +696,7 @@ class PINN(nn.Module):
         def get_boundary_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
             u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
                 slice_idxs, hess_samp, grads_samp, out_samp)
-            if self.conf['hyperparams']["flag_BC_PINN"]:
+            if self.conf["flag_BC_PINN"]:
                 residuals = vmap(self.get_BC_residuals_single_sample)(
                     x_BC, x_mask_BC, u, v, p, u_x, v_y, p_x, p_y
                 )
@@ -707,8 +708,8 @@ class PINN(nn.Module):
 
         need_second_derivative = False
         need_first_derivative = False
-        if self.conf['hyperparams']["flag_BC_PINN"]: need_first_derivative = True
-        match self.conf['hyperparams']["PINN_mode"]:
+        if self.conf["flag_BC_PINN"]: need_first_derivative = True
+        match self.conf["PINN_mode"]:
                 case "supervised_only": pass
                 case "continuity_only": need_first_derivative = True
                 case "full_laminar": need_second_derivative = True
@@ -745,7 +746,7 @@ class PINN(nn.Module):
                 (x, x_mask, edge_index, edge_attr, pos, batch),
             )
 
-        if self.conf["hyperparams"]["general_sampling"]["add_edges"] and (domain_slice.shape[0] != 0):
+        if self.conf["general_sampling"]["add_edges"] and (domain_slice.shape[0] != 0):
             residuals.update({"output_sampled_domain": out_samp[domain_slice]})
 
         return out_sup, residuals
@@ -759,7 +760,7 @@ class PINN(nn.Module):
 
         loss_dict = {}
 
-        if (data is not None) and self.conf["hyperparams"]["general_sampling"]["add_edges"]:
+        if (data is not None) and self.conf["general_sampling"]["add_edges"]:
             
             output_sampled_domain = residuals.pop("output_sampled_domain")
             device = output_sampled_domain.device
@@ -798,8 +799,10 @@ class PINN(nn.Module):
                 gt_in_sampled = torch.stack((x_vel, y_vel, press, k_turb, w_turb), dim=1)/normalization_const.view(-1,1)
 
             # i=0   # 0,1,2,3,4
-            # plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,i], data.pos[:,:2], data.y[:,i])
-            # plot_PYVISTA(data.pos[:,:2], data.y[:,0])
+            # pl = plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,i], data.pos[:,:2], data.y[:,i])
+            # pl = plot_PYVISTA(data.pos[:,:2], data.y[:,0])
+            # pl.set_scale(zscale=10)
+            # pl.show()
 
             ### WITHOUT WEIGHTS (squared distance)
             # x_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, label[faces][:,0], "mean", include_self=False)

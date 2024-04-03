@@ -79,9 +79,10 @@ def get_obj_from_structure(
                     return out_channels, obj
                         
                 case "NNConv":
+                    raise NotImplementedError("changed config and didn't update this")
                     out_channels_conv = str_d["out_channels"]
                     _, mlp = get_obj_from_structure(
-                                in_channels=conf["hyperparams"]["feature_dim"],
+                                in_channels=conf["feature_dim"],
                                 str_d=str_d["nn"],
                                 conf=conf,
                                 out_channels=in_channels*str_d["out_channels"]
@@ -94,6 +95,7 @@ def get_obj_from_structure(
                     return out_channels_conv, obj
                         
                 case "MLPConv":
+                    raise NotImplementedError("changed config and didn't update this")
                     out_channels = str_d["out_channels"]
                     _, mlp = get_obj_from_structure(
                                 in_channels=str_d["mid_channels"],
@@ -119,7 +121,7 @@ def get_obj_from_structure(
                     update_edges = str_d["update_edges"]
                     # edge_channels = str_d["edges_channels"] if update_edges else conf["hyperparams"]["feature_dim"]
                     #### If it doesn't work, remove line below and add line above
-                    edge_channels = str_d["edges_channels"] if update_edges else conf["hyperparams"]["edge_feature_dim"]
+                    edge_channels = str_d["edges_channels"] if update_edges else len(conf["graph_edge_attr_list"])
 
                     in_channels_mlp = 2*out_channels + edge_channels
                     in_channels_mlp_update = out_channels

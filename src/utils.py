@@ -3,6 +3,7 @@ import pickle
 from typing import Literal, Optional, Union
 import itertools
 
+import wandb
 import meshio
 import pyvista
 import toughio
@@ -24,6 +25,17 @@ from rustworkx import distance_matrix
 from config_pckg.config_file import Config
 import read_mesh_meshio_forked
 from mesh_exploration import plot_2d_cfd
+
+
+def init_wandb(conf: Config, overwrite_WANDB_MODE: Optional[Literal["online", "offline"]] = None):
+    if overwrite_WANDB_MODE is not None:
+        conf.WANDB_MODE = overwrite_WANDB_MODE
+    os.environ["WANDB_MODE"] = conf.WANDB_MODE
+    wandb.init(
+        project="Thesis",
+        config=conf
+    )
+
 
 def read_mesh(filename, mode: Literal["meshio", "pyvista", "toughio"], conf: Config):
     '''Reads mesh given mode'''
@@ -442,12 +454,14 @@ def normalize_features(features, conf):
             raise NotImplementedError("Only implemented 'None' and 'Physical'")
 
 
-def normalize_labels(data, 
-                        labels_to_keep_for_training, label_normalization_mode, v_inlet,
-                        dict_labels_train, ):
-    
-    if isinstance(data, pd.Series):
-        tmp = torch.tensor(data.values)
+def normalize_labels(data, conf):
+    labels_to_keep_for_training = conf["labels_to_keep_for_training"]
+    label_normalization_mode = conf["label_normalization_mode"]
+    v_inlet = conf["air_speed"] 
+    dict_labels_train = conf["dict_labels_train"] 
+
+    if isinstance(data, dict):
+        tmp = torch.tensor([data[k] for k in labels_to_keep_for_training])
     else: # graph
         tmp = data.y.T
 
@@ -480,7 +494,7 @@ def normalize_labels(data,
             case _:
                 raise NotImplementedError()
     
-    if isinstance(data, pd.Series):
+    if isinstance(data, dict):
         return tmp
     else: # graph
         data.y = tmp.T
@@ -532,32 +546,34 @@ def denormalize_labels(labels, conf):
     '''
     Connected to NormalizeLabels augmentation
     '''
-    for column, label in zip(labels.T, conf.labels_to_keep_for_training):
+    label_normalization_mode = conf["label_normalization_mode"]
+    dict_labels_train = conf["dict_labels_train"] 
+    for column, label in zip(labels.T, conf["labels_to_keep_for_training"]):
 
         # TODO: maybe add a graph-wise norm?
-        match conf.label_normalization_mode[label]["main"]:
+        match label_normalization_mode[label]["main"]:
             case "physical":
                 if label in ["x-velocity", "y-velocity"]:
-                    column *= conf.air_speed
+                    column *= conf["air_speed"]
                 elif label == "pressure":
-                    column *= (conf.air_speed**2)/2
+                    column *= (conf["air_speed"]**2)/2
                 else:
                     raise ValueError(f"Physical normalization no available for {label}")
             case "max-normalization":
                 if (label in ["x-velocity", "y-velocity"]) and \
-                        conf.label_normalization_mode[label].get("magnitude", False):
-                    column *= conf.dict_labels_train["max_magnitude"]["v_mag"]
+                        label_normalization_mode[label].get("magnitude", False):
+                    column *= dict_labels_train["max_magnitude"]["v_mag"]
                 else:
-                    column *= conf.dict_labels_train["max_magnitude"][label]
+                    column *= dict_labels_train["max_magnitude"][label]
 
             case "standardization":
                 if (label in ["x-velocity", "y-velocity"]) and \
-                        conf.label_normalization_mode[label].get("magnitude", False):
-                    column = column*conf.dict_labels_train["std"]["v_mag"]+ \
-                                conf.dict_labels_train["mean"]["v_mag"]
+                        label_normalization_mode[label].get("magnitude", False):
+                    column = column*dict_labels_train["std"]["v_mag"]+ \
+                                dict_labels_train["mean"]["v_mag"]
                 else:
-                    column = column*conf.dict_labels_train["std"][label]+\
-                              conf.dict_labels_train["mean"][label]
+                    column = column*dict_labels_train["std"][label]+\
+                              dict_labels_train["mean"][label]
             case _:
                 raise NotImplementedError()
         
@@ -566,7 +582,7 @@ def denormalize_labels(labels, conf):
 
 def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf, run_name: Optional[str]= None):
     data.name = data.name.removesuffix("_ascii.msh")
-    with open(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, data.name+".pkl"), "rb") as f:
+    with open(os.path.join(conf["EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS"], data.name+".pkl"), "rb") as f:
         meshCI = pickle.load(f)
         
     print(f"Plotting {meshCI.name}")
@@ -991,7 +1007,7 @@ class MeshCompleteInfo:
                 - if tup[1] is feature, a key of conf.graph_node_feature_dict
                 - additional special value "streamlines" in case --> ("cell", "label", "velocity") --> automatically add streamlines
         '''
-        assert self.conf.dim == 2, "Implement dim = 3"
+        assert self.conf["dim"] == 2, "Implement dim = 3"
         assert (what_to_plot is not None) or (labels is not None) or (return_meshes is not None), "Nothing to plot specified"
         # TODO: should we create permanent objects to avoid recomputation?
 
@@ -1041,7 +1057,7 @@ class MeshCompleteInfo:
 
         if labels is not None:
             # columns = self.conf.labels_to_keep_for_training # TODO: update all MeshComplete files from scratch
-            columns = conf.labels_to_keep_for_training
+            columns = conf["labels_to_keep_for_training"]
             face_pred_labels = pd.DataFrame(labels, columns=columns)
             cell_pred_lables = pd.DataFrame(
                 [np.mean(face_pred_labels.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
@@ -1083,20 +1099,20 @@ class MeshCompleteInfo:
                 pl.camera_position = "xy"
             pl.link_views()
             if run_name is not None:
-                if not os.path.isdir(self.conf.test_htmls_comparisons):
-                    os.mkdir(self.conf.test_htmls_comparisons)
-                if not os.path.isdir(self.conf.test_imgs_comparisons):
-                    os.mkdir(self.conf.test_imgs_comparisons)
+                if not os.path.isdir(self.conf["test_htmls_comparisons"]):
+                    os.mkdir(self.conf["test_htmls_comparisons"])
+                if not os.path.isdir(self.conf["test_imgs_comparisons"]):
+                    os.mkdir(self.conf["test_imgs_comparisons"])
 
-                if not os.path.isdir(os.path.join(self.conf.test_htmls_comparisons, run_name)):
-                    os.mkdir(os.path.join(self.conf.test_htmls_comparisons, run_name))
-                if not os.path.isdir(os.path.join(self.conf.test_imgs_comparisons, run_name)):
-                    os.mkdir(os.path.join(self.conf.test_imgs_comparisons, run_name))
+                if not os.path.isdir(os.path.join(self.conf["test_htmls_comparisons"], run_name)):
+                    os.mkdir(os.path.join(self.conf["test_htmls_comparisons"], run_name))
+                if not os.path.isdir(os.path.join(self.conf["test_imgs_comparisons"], run_name)):
+                    os.mkdir(os.path.join(self.conf["test_imgs_comparisons"], run_name))
 
                 pl.camera.zoom(1.6)
-                pl.export_html(os.path.join(self.conf.test_htmls_comparisons, run_name, self.name+"_cell.html"))
+                pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_cell.html"))
                 pl.screenshot(
-                    filename=os.path.join(self.conf.test_imgs_comparisons, run_name, self.name+"_cell.png"),
+                    filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_cell.png"),
                     window_size=(1920,1200))
             # pl.enable_anti_aliasing() # BREAKS EVERYTHING do NOT use
             else:
@@ -1127,9 +1143,9 @@ class MeshCompleteInfo:
             pl.link_views()
             if run_name is not None:
                 pl.camera.zoom(1.6)
-                pl.export_html(os.path.join(self.conf.test_htmls_comparisons, run_name, self.name+"_face.html"))
+                pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_face.html"))
                 pl.screenshot(
-                    filename=os.path.join(self.conf.test_imgs_comparisons, run_name, self.name+"_face.png"),
+                    filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_face.png"),
                     window_size=(1920,1200))
             # pl.enable_anti_aliasing() # BREAKS EVERYTHING do NOT use
             else:
@@ -1156,7 +1172,7 @@ class MeshCompleteInfo:
                             assert self.face_center_labels is not None, "You did not use 'add_labels' with mode='element' on this mesh, no labels present for faces or cells"
                             face_pyv_mesh.cell_data[tup[2]] = self.face_center_labels[tup[2]]
                         elif tup[1] == "feature":
-                            face_pyv_mesh.cell_data[tup[2]] = self.face_center_features[:,self.conf.graph_node_feature_dict[tup[2]]]
+                            face_pyv_mesh.cell_data[tup[2]] = self.face_center_features[:,self.conf["graph_node_feature_dict"][tup[2]]]
                         else:
                             raise ValueError(f"tup[1] can be only 'label' or 'feature', you wrote {tup[1]}")
                         

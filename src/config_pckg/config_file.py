@@ -23,31 +23,30 @@ class Config():
         '''
         self.ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.PROJECT_NAME = os.path.basename(self.ROOT_DIR)
+        self.WANDB_FLAG = True
 
-        if "win" in sys.platform:
-            self.DATA_DIR = os.path.join(self.ROOT_DIR, "data")
-            self.device: Literal["cpu", "cuda"] = "cuda"
+        self.DATA_DIR = os.path.join(self.ROOT_DIR, "data")
+        self.device: Literal["cpu", "cuda"] = "cpu"
 
-            ##### external folders
-            self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
-            self.EXTERNAL_FOLDER_MSH = os.path.join(self.EXTERNAL_FOLDER, "Mesh_ascii")
-            self.EXTERNAL_FOLDER_CSV = os.path.join(self.EXTERNAL_FOLDER, "CSV_ascii")
-            self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
-            self.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjsWithLabels_at300")
-            self.EXTERNAL_FOLDER_GRAPHS = os.path.join(self.EXTERNAL_FOLDER, "Graphs")
+        ##### external folders
+        self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
+        self.EXTERNAL_FOLDER_MSH = os.path.join(self.EXTERNAL_FOLDER, "Mesh_ascii")
+        self.EXTERNAL_FOLDER_CSV = os.path.join(self.EXTERNAL_FOLDER, "CSV_ascii")
+        self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
+        self.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjsWithLabels_at300")
+        self.EXTERNAL_FOLDER_GRAPHS = os.path.join(self.EXTERNAL_FOLDER, "Graphs")
         
-        elif "linux" in sys.platform:
+        if "UNIBO" in sys.platform:
+            raise NotImplementedError("Check this") # TODO: CHECK
             self.DATA_DIR = "/public.hpc/marcello.ceresini"
             self.device: Literal["cuda"] = "cuda"
-
-        else:
-            raise NotImplementedError(f"{sys.platform} is not supported yet")
+        # else:
+        #     raise NotImplementedError(f"{sys.platform} is not supported yet")
 
         self.standard_dataset_dir = os.path.join(self.DATA_DIR, "dataset_files")
         self.test_imgs_comparisons = os.path.join(self.DATA_DIR, "test_imgs_comparisons")
         self.test_htmls_comparisons = os.path.join(self.DATA_DIR, "test_htmls_comparisons")
         self.test_vtksz_comparisons = os.path.join(self.DATA_DIR, "test_vtksz_comparisons")
-        # self.standard_dataloader_path = os.path.join(self.DATA_DIR, "dataloaders.pt")
 
         self.problematic_files = {"2dtc_002R074_001_s01"}
 
@@ -98,7 +97,8 @@ class Config():
         ]
 
         with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "train_label_stats.pkl"), "rb") as f:
-            self.dict_labels_train = pickle.load(f)
+            dict_labels_train = pickle.load(f)
+            self.dict_labels_train = {k:v.to_dict() for k,v in dict_labels_train.items()}
 
         self.physical_labels = [
             'x-velocity',
@@ -205,6 +205,8 @@ class Config():
             "x_dist", "y_dist", "norm"
         ]
 
+        self.edge_feature_dim = len(self.graph_edge_attr_list)
+
         self.flag_directional_BC_velocity = True
 
         self.feature_normalization_mode = "Physical"
@@ -239,20 +241,20 @@ class Config():
         }
 
         with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "splits.pkl"), "rb") as f:
-            self.split_idxs = pickle.load(f)
+            split_idxs = pickle.load(f)
+            self.split_idxs = {k:list(v.values) for k,v in split_idxs.items()}
 
         self.metrics = {
-            "MAPR": MeanAbsolutePercentageError(), 
-            "wMAPR": WeightedMeanAbsolutePercentageError(), 
-            "SMAPE": SymmetricMeanAbsolutePercentageError(), 
-            "RSE": RelativeSquaredError(),
-            "MSE": MeanSquaredError(), 
-            "MAE": MeanAbsoluteError(),
-            "Pearson": PearsonCorrCoef()
+            "MAPR": MeanAbsolutePercentageError, 
+            "wMAPR": WeightedMeanAbsolutePercentageError, 
+            "SMAPE": SymmetricMeanAbsolutePercentageError, 
+            "RSE": RelativeSquaredError,
+            "MSE": MeanSquaredError, 
+            "MAE": MeanAbsoluteError,
+            "Pearson": PearsonCorrCoef
         }
 
-        self.metric_aero = metrics.AeroMetric()
-
+        self.metric_aero = metrics.AeroMetric
 
         self.bool_radial_attributes = True
         if self.bool_radial_attributes:
@@ -278,7 +280,7 @@ class Config():
             for metric_name, metric_obj in self.metrics.items()}
 
         self.bool_bootstrap_bias = True
-        self.bootstrap_bias = self.dict_labels_train["mean"][self.labels_to_keep_for_training]
+        self.bootstrap_bias = {k:self.dict_labels_train["mean"][k] for k in self.labels_to_keep_for_training}
         
         self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar", "turbulent_kw", "turbulent_kw_nu_t_derived"] \
                                 = "turbulent_kw"
@@ -300,7 +302,7 @@ class Config():
                                     "shift_on_face":True}
 
         self.general_sampling = {"add_edges": True,
-                                    "use_sampling_weights":True}
+                                    "use_sampling_weights":False}
         self.n_sampled_new_edges = 3
 
         self.standard_weights = {

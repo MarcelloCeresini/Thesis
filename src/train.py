@@ -13,9 +13,11 @@ from torch.optim import Adam
 import torch.optim.lr_scheduler as lr_scheduler 
 from torch.masked import masked_tensor
 from pandas import json_normalize
+import torchmetrics
 
 from utils import print_memory_state_gpu, get_input_to_model, get_forces
 from config_pckg.config_file import Config 
+import loss_pckg
 
 
 def clean_labels(batch, conf: Config):
@@ -25,12 +27,12 @@ def clean_labels(batch, conf: Config):
             labels = torch.masked.masked_tensor(batch.y, batch.y_mask)
     else:
         labels = batch.y
-    return labels[:,:conf["hyperparams"]["label_dim"]]
+    return labels[:,:conf["output_dim"]]
 
 
 def forward_metric_results(preds, labels, conf, metric_dict):
     for metric_obj_subdict in metric_dict.values():
-        for i, column in enumerate(conf.labels_to_keep_for_training):
+        for i, column in enumerate(conf["labels_to_keep_for_training"]):
                 metric_obj_subdict[column].forward(preds[:,i], labels[:,i])
     return metric_dict
 
@@ -38,7 +40,7 @@ def forward_metric_results(preds, labels, conf, metric_dict):
 def compute_metric_results(metric_dict, conf):
     metric_results = metric_dict.copy() # just to copy the structure
     for metric_res_subdict, metric_obj_subdict in zip(metric_results.values(), metric_dict.values()):
-        for column in conf.labels_to_keep_for_training:
+        for column in conf["labels_to_keep_for_training"]:
             metric_res_subdict[column] = metric_obj_subdict[column].compute()
     return metric_results
 
@@ -54,8 +56,10 @@ def write_metric_results(metric_results, writer, epoch, split="val") -> None:
 
 
 def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
-    metric_dict = deepcopy(conf.metric_dict)
-    metric_aero = conf.metric_aero
+    metric_dict = deepcopy(conf["metric_dict"])
+    for metric_name in metric_dict:
+        metric_dict[metric_name] = {k:eval(v)() for k,v in metric_dict[metric_name].items()}
+    metric_aero = eval(deepcopy(conf["metric_aero"]))()
 
     device = list(model.parameters())[0].device
 
@@ -74,7 +78,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
 
             if isinstance(loss, tuple):
                 standard_loss = loss[0]
-                loss_dict = {k:v*conf.standard_weights.get(k,1) for k,v in loss[1].items()}
+                loss_dict = {k:v*conf["standard_weights"].get(k,1) for k,v in loss[1].items()}
                 optional_values = {k:v for k,v in loss[2].items()}
 
                 pred = pred[0]
@@ -84,7 +88,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                 for k in optional_values:
                     total_optional_values[k] = total_optional_values.get(k,0) + \
                                             optional_values[k].item()*batch.num_graphs
-                if conf.dynamic_loss_weights:
+                if conf["dynamic_loss_weights"]:
                     loss = sum(loss_dict[k]*loss_weights.get(k,1) for k in loss_dict)
                 else:
                     loss = sum(loss_dict[k] for k in loss_dict)
@@ -95,16 +99,17 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
             for i in range(len(batch)):
                 data = batch[i]
                 pred_sample_pressure = pred[batch.ptr[i]:batch.ptr[i+1], 2]
-                normalized_label = {key: 2*val/conf.air_speed**2 for key, val in data.force_on_component.items()}
+                normalized_label = {key: 2*val/conf["air_speed"]**2 for key, val in data.force_on_component.items()}
                 metric_aero.forward(pred=get_forces(conf, data, pred_sample_pressure), 
                                     label=normalized_label)
                 
             batch.cpu()
+            break
 
         total_loss /= len(loader.dataset)
         for k in total_loss_dict: total_loss_dict[k] /= len(loader.dataset)
         for k in total_optional_values: total_optional_values[k] /= len(loader.dataset)
-        if conf.dynamic_loss_weights:
+        if conf["dynamic_loss_weights"]:
             for k in total_loss_dict: 
                 total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights.get(k,1)
         
@@ -123,42 +128,34 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
 
 
 def train(
-        model,
+        model: torch.nn.Module,
         train_loader, 
         val_loader, 
-        writer: SummaryWriter | bool, 
-        conf: Config):
-    
-    if isinstance(writer, bool):
-        WANDB_FLAG = True
-        run_name = wandb.run.dir.split(os.sep)[-2]
-    else:
-        run_name = os.path.basename(os.path.normpath(writer.get_logdir()))
+        conf: Config,
+        run_name: str):
 
-    if not os.path.isdir(os.path.join(conf.DATA_DIR, "model_checkpoints")):
-        os.mkdir(os.path.join(conf.DATA_DIR, "model_checkpoints"))
-    os.mkdir(os.path.join(conf.DATA_DIR, "model_checkpoints", run_name))
+    if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_checkpoints")):
+        os.mkdir(os.path.join(conf["DATA_DIR"], "model_checkpoints"))
+    os.mkdir(os.path.join(conf["DATA_DIR"], "model_checkpoints", run_name))
 
-    
-    if WANDB_FLAG:
-        wandb.watch(
-            model,
-            log=conf.logging["model_log_mode"],
-            log_freq=conf.logging["n_batches_freq"],
-            log_graph=conf.logging["log_graph"]
-        )
+    wandb.watch(
+        model,
+        log=conf["logging"]["model_log_mode"],
+        log_freq=conf["logging"]["n_batches_freq"],
+        log_graph=conf["logging"]["log_graph"]
+    )
 
     opt = Adam(
         params = model.parameters(),
-        lr = conf.hyper_params["training"]["lr"],
-        weight_decay = conf.hyper_params["training"]["weight_decay"],
+        lr = conf["hyper_params"]["training"]["lr"],
+        weight_decay = conf["hyper_params"]["training"]["weight_decay"],
     )
 
     scheduler = lr_scheduler.ReduceLROnPlateau(
         optimizer=opt, 
-        patience=conf.hyper_params["training"]["patience_reduce_lr"],
-        min_lr=conf.hyper_params["training"]["min_lr"],
-        cooldown=conf.hyper_params["training"]["cooldown"],
+        patience=conf["hyper_params"]["training"]["patience_reduce_lr"],
+        min_lr=conf["hyper_params"]["training"]["min_lr"],
+        cooldown=conf["hyper_params"]["training"]["cooldown"],
         threshold=0, 
         threshold_mode='abs',
         mode="min",
@@ -166,20 +163,18 @@ def train(
 
     scheduler_for_training_end = lr_scheduler.ReduceLROnPlateau(
         optimizer=opt,
-        patience=conf.hyper_params["training"]["patience_end_training"],
+        patience=conf["hyper_params"]["training"]["patience_end_training"],
         threshold=0, 
         threshold_mode='abs',
         mode="min",
     )
 
     best_epoch = 0
-
-    print_memory_state_gpu("Before training", conf)
-
+    # print_memory_state_gpu("Before training", conf)
     loss_weights = {}
     mean_grads = {}
 
-    for epoch in tqdm(range(conf.hyper_params["training"]["n_epochs"]), desc="Epoch", position=0):
+    for epoch in tqdm(range(conf["hyper_params"]["training"]["n_epochs"]), desc="Epoch", position=0):
         total_loss = 0
         total_loss_dict = {}
         total_optional_values = {}
@@ -239,37 +234,27 @@ def train(
                         input("Press something to go onwards")
 
             total_loss += loss.item() * batch.num_graphs
-            # break
+            break
 
         total_loss /= len(train_loader.dataset)
         for k in total_loss_dict: total_loss_dict[k] /= len(train_loader.dataset)
         for k in total_optional_values: total_optional_values[k] /= len(train_loader.dataset)
 
-        if WANDB_FLAG:
-            log_dict = {
-                "standard_loss": standard_loss,
-                "train_loss": total_loss,
-                "lr": opt.param_groups[0]["lr"],
-                "epoch": epoch,
-                "num_bad_epochs/lr_scheduler": scheduler.num_bad_epochs,
-                "num_bad_epochs/end_of_training": scheduler_for_training_end.num_bad_epochs,
-            }
-            log_dict.update(total_loss_dict)
-            log_dict.update(total_optional_values)
+        log_dict = {
+            "standard_loss": standard_loss,
+            "train_loss": total_loss,
+            "lr": opt.param_groups[0]["lr"],
+            "epoch": epoch,
+            "num_bad_epochs/lr_scheduler": scheduler.num_bad_epochs,
+            "num_bad_epochs/end_of_training": scheduler_for_training_end.num_bad_epochs,
+        }
+        log_dict.update(total_loss_dict)
+        log_dict.update(total_optional_values)
 
-            wandb.log(log_dict, epoch)
-        else:
-            # TODO: add loss_dict to writer
-            writer.add_scalar(f"{conf.hyper_params['loss']}/train", total_loss, epoch)
-            writer.add_scalar("lr", opt.param_groups[0]["lr"], epoch) # learning rate
-            writer.add_scalar("epoch", epoch, epoch) # learning rate
-            writer.add_scalar("num_bad_epochs/lr_scheduler", scheduler.num_bad_epochs, epoch)
-            writer.add_scalar("num_bad_epochs/end_of_training", scheduler_for_training_end.num_bad_epochs, epoch)
-            writer.add_scalar("GPU_occ/allocated", torch.cuda.memory_allocated()/1024**3, epoch)
-            writer.add_scalar("GPU_occ/reserved", torch.cuda.memory_reserved()/1024**3, epoch)
+        wandb.log(log_dict, epoch)
         
         # torch.cuda.empty_cache()
-        if epoch % conf.hyper_params["val"]["n_epochs_val"] == 0:
+        if epoch % conf["hyper_params"]["val"]["n_epochs_val"] == 0:
             val_loss, metric_results = test(val_loader, model, conf, loss_weights)
             # torch.cuda.empty_cache()
 
@@ -287,14 +272,10 @@ def train(
                 
                 # torch.save(model.state_dict(), model_save_path)
             
-            if WANDB_FLAG:
-                wandb.log({"val_loss": val_loss}, epoch)
-                wandb.log({"metric": metric}, epoch)
-                wandb.log({"best_metric": scheduler.best}, epoch)
-                wandb.log({f"val_{k}":v for k,v in metric_results.items()}, epoch)
-            else:
-                writer.add_scalar(f"{conf.hyper_params['loss']}/val", val_loss, epoch)
-                write_metric_results(metric_results, writer, epoch)
+            wandb.log({"val_loss": val_loss}, epoch)
+            wandb.log({"metric": metric}, epoch)
+            wandb.log({"best_metric": scheduler.best}, epoch)
+            wandb.log({f"val_{k}":v for k,v in metric_results.items()}, epoch)
 
         # scheduler.step(metrics=val_loss)
         # scheduler_for_training_end.step(metrics=val_loss)

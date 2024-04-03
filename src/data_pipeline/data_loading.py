@@ -3,6 +3,7 @@ import os, glob
 from typing import Any, Callable, Optional
 
 from torch_geometric.data.data import BaseData
+import wandb
 from config_pckg.config_file import Config
 
 import numpy as np
@@ -29,33 +30,31 @@ class CfdDataset(InMemoryDataset):
         return torch.load(os.path.join(self.root, data_filenames[idx]))
 
 
-def get_data_loaders(conf: Config, n_workers: Optional[int] = 4):
-    # TODO: implement transformation to add labels during loader creation
-    # to avoid saving n different graphs for n different snapshots of the same simulation
-    full_conf = conf.get_logging_info()
+def get_data_loaders(conf):
     transform_list = []
-    if not conf.bool_radial_attributes:
-        transform_list.append(RemoveRadialAttributes(conf.n_radial_attributes))
-    if conf.flag_BC_PINN:
-        transform_list.append(SampleBoundaryPoints(full_conf))
-    if conf.PINN_mode != "supervised_only" or conf.domain_sampling["add_edges"]:
-        transform_list.append(SampleDomainPoints(full_conf))
-    if not conf.output_turbulence:
-        transform_list.append(RemoveTurbulentLabels())
+    if not conf["bool_radial_attributes"]:
+        transform_list.append(RemoveRadialAttributes(conf))
+    if conf["flag_BC_PINN"]:
+        transform_list.append(SampleBoundaryPoints(conf))
+    if conf["PINN_mode"] != "supervised_only" or conf["domain_sampling"]["add_edges"]:
+        transform_list.append(SampleDomainPoints(conf))
+    if not conf["output_turbulence"]:
+        transform_list.append(RemoveTurbulentLabels(conf))
 
     transform_list.append(NormalizeLabels(conf))
 
     transforms = pyg_t.Compose(transform_list)
 
-    dataset_train = CfdDataset(conf.split_idxs["train"], root=conf.standard_dataset_dir, transform=transforms)
-    dataset_val = CfdDataset(conf.split_idxs["val"], root=conf.standard_dataset_dir, transform=transforms)
-    dataset_test = CfdDataset(conf.split_idxs["test"], root=conf.standard_dataset_dir, transform=transforms)
+    dataset_train = CfdDataset(np.array(conf["split_idxs"]["train"]), root=conf["standard_dataset_dir"], transform=transforms)
+    dataset_val = CfdDataset(np.array(conf["split_idxs"]["val"]), root=conf["standard_dataset_dir"], transform=transforms)
+    dataset_test = CfdDataset(np.array(conf["split_idxs"]["test"]), root=conf["standard_dataset_dir"], transform=transforms)
 
+    n_workers_train=conf["hyper_params"]["training"]["n_workers_dataloaders"]
     train_dataloader = DataLoader(dataset_train, 
-                            batch_size=conf.hyper_params["training"]["batch_size"],
+                            batch_size=conf["hyper_params"]["training"]["batch_size"],
                             shuffle=True, 
-                            num_workers=n_workers, 
-                            persistent_workers=n_workers>0,
+                            num_workers=n_workers_train, 
+                            persistent_workers=n_workers_train>0,
                             pin_memory=True
                             )
     val_dataloader  = DataLoader(dataset_val,
