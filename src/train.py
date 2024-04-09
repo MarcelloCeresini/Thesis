@@ -3,6 +3,7 @@ import os
 from typing import Literal, Optional
 from tqdm import tqdm
 from datetime import datetime
+import sys
 
 import torch
 import torch.nn.functional as F
@@ -18,6 +19,7 @@ import torchmetrics
 from utils import print_memory_state_gpu, get_input_to_model, get_forces
 from config_pckg.config_file import Config 
 import loss_pckg
+
 
 
 def clean_labels(batch, conf: Config):
@@ -81,7 +83,6 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                 loss_dict = {k:v*conf["standard_weights"].get(k,1) for k,v in loss[1].items()}
                 optional_values = {k:v for k,v in loss[2].items()}
 
-                pred = pred[0]
                 for k in loss_dict: 
                     total_loss_dict[k] = total_loss_dict.get(k, 0) + \
                                             loss_dict[k].item()*batch.num_graphs
@@ -94,17 +95,31 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                     loss = sum(loss_dict[k] for k in loss_dict)
             
             total_loss += loss.item() * batch.num_graphs
-            metric_dict = forward_metric_results(pred.cpu(), labels.cpu(), conf, metric_dict)
+            metric_dict = forward_metric_results(pred[0].cpu(), labels.cpu(), conf, metric_dict)
             
             for i in range(len(batch)):
                 data = batch[i]
-                pred_sample_pressure = pred[batch.ptr[i]:batch.ptr[i+1], 2]
-                normalized_label = {key: 2*val/conf["air_speed"]**2 for key, val in data.force_on_component.items()}
-                metric_aero.forward(pred=get_forces(conf, data, pred_sample_pressure), 
-                                    label=normalized_label)
+                pred_sample_pressure = pred[0][batch.ptr[i]:batch.ptr[i+1], 2]
+                assert batch.ptr.shape[0] == 2, "Check derivatives for batch size higher than 1"
+                pred_vel_derivatives = torch.stack(pred[2])
+                if conf.output_turbulence:
+                    pred_turb_values = pred[0][batch.ptr[i]:batch.ptr[i+1], 3:]
+                else:
+                    pred_turb_values = None
+                pred_forces = get_forces(conf, data, pred_sample_pressure, 
+                    velocity_derivatives=pred_vel_derivatives, turbulent_values=pred_turb_values, 
+                    denormalize=True, from_boundary_sampling=True)
+                
+                metric_aero.forward(pred=pred_forces,
+                                    label=data.force_on_component)
                 
             batch.cpu()
-            break
+
+            gettrace = getattr(sys, 'gettrace', None)
+            if gettrace is not None:
+                if gettrace():
+                    print('Hmm, Big Debugger is watching me --> breaking in TEST')
+                    break
 
         total_loss /= len(loader.dataset)
         for k in total_loss_dict: total_loss_dict[k] /= len(loader.dataset)
@@ -130,7 +145,8 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
 def train(
         model: torch.nn.Module,
         train_loader, 
-        val_loader, 
+        val_loader,
+        dataloader_train_for_metrics,
         conf: Config,
         run_name: str):
 
@@ -220,7 +236,7 @@ def train(
                     loss = sum(loss_dict[k] for k in loss_dict)
             
             loss.backward()
-            torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=10, foreach=True)
+            torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=conf.gradient_clip_value, foreach=True)
             opt.step()
             batch.cpu()
 
@@ -234,7 +250,11 @@ def train(
                         input("Press something to go onwards")
 
             total_loss += loss.item() * batch.num_graphs
-            break
+            gettrace = getattr(sys, 'gettrace', None)
+            if gettrace is not None:
+                if gettrace():
+                    print('Hmm, Big Debugger is watching me --> breaking in TRAIN')
+                    break
 
         total_loss /= len(train_loader.dataset)
         for k in total_loss_dict: total_loss_dict[k] /= len(train_loader.dataset)
@@ -276,6 +296,13 @@ def train(
             wandb.log({"metric": metric}, epoch)
             wandb.log({"best_metric": scheduler.best}, epoch)
             wandb.log({f"val_{k}":v for k,v in metric_results.items()}, epoch)
+
+            train_standard_loss, train_metric_results = test(dataloader_train_for_metrics, model, conf, loss_weights)
+            train_standard_metric = sum([metric_results["MAE"][k] for k in conf.physical_labels])
+
+            wandb.log({"train_standard_loss": train_standard_loss}, epoch)
+            wandb.log({"train_standard_metric": train_standard_metric}, epoch)
+            wandb.log({f"train_standard_{k}":v for k,v in train_metric_results.items()}, epoch)
 
         # scheduler.step(metrics=val_loss)
         # scheduler_for_training_end.step(metrics=val_loss)

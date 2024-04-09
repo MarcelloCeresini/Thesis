@@ -24,7 +24,7 @@ from config_pckg.config_file import Config
 from loss_pckg.losses import MSE_loss
 from .model_utils import get_obj_from_structure, forward_for_general_layer
 from .layers import Simple_MLPConv
-from utils import normalize_labels
+from utils import denormalize_label, normalize_label
 
 def plot_PYVISTA(pos: torch.Tensor, value: torch.Tensor, pos2: Optional[torch.Tensor]=None, value2: Optional[torch.Tensor]=None, rescale_z=False, point_size=3):
     points = np.stack([
@@ -291,7 +291,9 @@ class EPD_with_sampling(nn.Module):
         )
 
         if self.conf.get("bool_bootstrap_bias",False):
-            init_bias = normalize_labels(self.conf["bootstrap_bias"],self.conf)
+            init_bias = torch.zeros_like(self.decoder[-1].bias)
+            for i, (k, value) in enumerate(self.conf["bootstrap_bias"].items()):
+                init_bias[i] = normalize_label(value, k, self.conf)
             with torch.no_grad():
                 self.decoder[-1].bias = nn.Parameter(init_bias.to(torch.float32))
 
@@ -484,11 +486,18 @@ class PINN(nn.Module):
         self.domain_sampling = self.conf["domain_sampling"]
         self.boundary_sampling = self.conf["boundary_sampling"]
 
-        self.Re = 1/(1.45e-5) # V_char=1, L_char=1
         self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
 
 
     def get_BC_residuals_single_sample(self, x, x_mask, u, v, p, u_x, v_y, p_x, p_y):
+
+        # FIXME: denormalization?
+        # pros: summing residuals of velocity and pressure gives the correctcly weigthed contribute
+        # cons: need to denormalize also the gt_label, not only the prediction
+        u, u_x = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x)), "x-velocity", self.conf)
+        v, v_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_y)), "y-velocity", self.conf)
+        p, p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p, p_x, p_y)), "pressure", self.conf)
+
         feat_dict = self.conf["graph_node_feature_dict"]
         mask_dict = self.conf["graph_node_feature_mask"]
 
@@ -496,23 +505,26 @@ class PINN(nn.Module):
         mask_dict_copy.pop("is_BC")
 
         t_x, t_y = x[feat_dict["tangent_versor_x"]], x[feat_dict["tangent_versor_y"]]
-        n_x, n_y = -t_y, +t_x
+        n_x_tmp, n_y_tmp = -t_y, +t_x
+
+        # in this way v-inlet (only one with normal BC where value != 0) is correct (right-facing)
+        n_y = torch.where(n_x_tmp>0, n_y_tmp, -n_y_tmp)
+        n_x = torch.where(n_x_tmp>0, n_x_tmp, -n_x_tmp) # could also do abs
 
         residual = {k: torch.zeros_like(p_x, device=p_x.device) for k in mask_dict_copy}
         c = torch.zeros_like(p_x, device=p_x.device)
-        # TODO: dynamic weights for these components?
         for k in mask_dict_copy:
             match k:
                 case "v_t":
                     v_t_pred = (t_x*u + t_y*v)
                     residual["v_t"] += (v_t_pred - x[feat_dict["v_t"]]).abs()       * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
-                case "v_n": # TODO:  check v_inlet if it's right
-                    # "inward" is not a problem with walls because v_n should always be 0 --> no matter the direction 
+                case "v_n": # if it's a wall, no problem because v_n=0 (for inlet, see above)
                     v_n_pred = (n_x*u + n_y*v)
+                    # FIXME: denormalization of x[feat_dict["v_n"]] for example for v_inlet --> NOW THE X IS NORMALIZED!
                     residual["v_n"] += (v_n_pred - x[feat_dict["v_n"]]).abs()       * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
-                case "p":
+                case "p": # only zero for now
                     residual["p"] += (p - x[feat_dict["p"]]).abs()                  * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                 case "dv_dn": # pressure-outlet = n_x*U_x + n_y*U_y = n_x*u_x + n_y*v_y
@@ -520,7 +532,7 @@ class PINN(nn.Module):
                     residual["dv_dn"] += (dv_dn_pred - x[feat_dict["dv_dn"]]).abs() * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                     # should be torch.dot(normal, (u_x, v_y)), but pressure-outlet is vertical
-                    # residual += u_x.square()
+                    # residual += u_x
                 case "dp_dn": # 
                     dp_dn_pred = (n_x*p_x + n_y*p_y)
                     residual["dp_dn"] += (dp_dn_pred - x[feat_dict["dp_dn"]]).abs() * x_mask[mask_dict[k]]
@@ -534,7 +546,8 @@ class PINN(nn.Module):
                                             u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True):
         '''tij = k/w * (dui/dxj + duj/dxi) - (2/3)*k*delta_cronecker(i,j)'''
         if as_solver:
-            w_clamped = torch.clamp(w, min=1e-8)
+            # FIXME: constants, physics
+            w_clamped = torch.clamp(w, min=self.conf.w_min_for_clamp)
             nu_t = k/w_clamped
             txx_x = 2*(nu_t*u_xx - k_x/3)
             txy_y = nu_t*(u_yy+v_xy)
@@ -542,7 +555,7 @@ class PINN(nn.Module):
             tyy_y = 2*(nu_t*v_yy - k_y/3)
         else:
             raise NotImplementedError("Look if this clamp is ok")
-            w_clamped = torch.clamp(w, min=1e-4)
+            w_clamped = torch.clamp(w, min=self.conf.w_min_for_clamp)
             txx_x = 2*((k_x*u_x+k*u_xx)/w_clamped - k*u_x*w_x/w_clamped**2 - k_x/3)
             txy_y = (k_y*(u_y+v_x) + k*(u_yy+v_xy))/w_clamped - (u_y+v_x)*k*w_y/w_clamped**2
             tyx_x = (k_x*(v_x+u_y) + k*(v_xx+u_yx))/w_clamped - (v_x+u_y)*k*w_x/w_clamped**2
@@ -552,7 +565,8 @@ class PINN(nn.Module):
 
     def forward(self,
             x: torch.Tensor,
-            x_mask: torch.Tensor, 
+            x_mask: torch.Tensor,
+            x_additional: torch.Tensor, 
             edge_index: torch.Tensor, 
             edge_attr: torch.Tensor,
             pos: torch.Tensor,
@@ -564,7 +578,8 @@ class PINN(nn.Module):
 
         pos = pos[:,:2]
         if edge_attr.shape[1] == 4:
-            edge_attr = edge_attr[:, torch.tensor([0,1,3])]
+            # edge_attr = edge_attr[:, torch.tensor([0,1,3])]
+            edge_attr = edge_attr[:, :2] # no norm
         
         if kwargs.get("domain_sampling_points", None) is not None:
             domain_sampling_points = torch.autograd.Variable(kwargs["domain_sampling_points"], requires_grad=True)
@@ -581,6 +596,7 @@ class PINN(nn.Module):
 
             boundary_sampling_points = torch.autograd.Variable(kwargs["boundary_sampling_points"], requires_grad=True)
             n_boundary_points = boundary_sampling_points.shape[0]
+            additional_boundary = kwargs["x_additional_boundary"]
         else:
             boundary_sampling_points = torch.autograd.Variable(torch.FloatTensor().to(x.device))
             n_boundary_points = 0
@@ -603,9 +619,7 @@ class PINN(nn.Module):
 
         def compute_output(sampling_points, new_edges):
             # if the distance goes to zero, the grad on the norm goes to NaN (because of the derivative of the sqrt)
-            dist = (pos[new_edges, :2]-sampling_points).clamp(min=1e-7) 
-            norm = torch.linalg.norm(dist, dim=1, keepdim=True)
-            new_edge_attributes = torch.cat((dist, norm), dim=1)
+            new_edge_attributes = (pos[new_edges, :2]-sampling_points)
 
             out_samp, out_sup = functional_call(
                 self.net,
@@ -653,6 +667,7 @@ class PINN(nn.Module):
                         u_x, u_y, v_x, v_y, p_x, p_y, k_x, k_y, w_x, w_y, \
                         u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy
 
+
         def get_domain_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
             if not "turbulent_kw" in self.conf["PINN_mode"]:
                 u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
@@ -668,25 +683,45 @@ class PINN(nn.Module):
                 case "supervised_only":
                     pass
                 case "continuity_only":
+                    u_x = denormalize_label(u_x, "x-velocity", self.conf)
+                    v_y = denormalize_label(v_y, "y-velocity", self.conf)
+                # FIXME: constants, physics
                     residuals.update({"continuity": (u_x + v_y)})
                 case "full_laminar":
+                    u, u_x, u_y, u_xx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yy)), "x-velocity", self.conf)
+                    v, v_x, v_y, v_xx, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_yy)), "y-velocity", self.conf)
+                    p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
+                # FIXME: constants, physics
                     residuals.update({"continuity": (u_x + v_y),
-                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re,
-                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re,})
+                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.conf.Re,
+                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.conf.Re,})
                 case "turbulent_kw":
                     assert self.conf["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
+                    u, u_x, u_y, u_xx, u_yx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yx, u_yy)), "x-velocity", self.conf)
+                    v, v_x, v_y, v_xx, v_xy, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_xy, v_yy)), "y-velocity", self.conf)
+                    p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
+                    k, k_x, k_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((k, k_x, k_y)), "turb-kinetic-energy", self.conf)
+                    w, w_x, w_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((w, w_x, w_y)), "turb-diss-rate", self.conf)
+                # FIXME: constants, physics
                     txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
                         u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True)
+                # FIXME: constants, physics
                     residuals.update({"continuity": (u_x + v_y),
-                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re + txx_x + txy_y,
-                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re + tyx_x + tyy_y,})
+                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.conf.Re + txx_x + txy_y,
+                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.conf.Re + tyx_x + tyy_y,})
                 case "turbulent_kw_nu_t_derived":
+                    raise NotImplementedError("Problems with lift/drag calculus because we don't have derivatives of turbulence su cannot compute nu_t")
                     assert self.conf["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
+                    u, u_x, u_y, u_xx, u_yx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yx, u_yy)), "x-velocity", self.conf)
+                    v, v_x, v_y, v_xx, v_xy, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_xy, v_yy)), "y-velocity", self.conf)
+                    p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
+                    k, k_x, k_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((k, k_x, k_y)), "turb-kinetic-energy", self.conf)
+                    w, w_x, w_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((w, w_x, w_y)), "turb-diss-rate", self.conf)
                     txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
                         u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=False)
                     residuals.update({"continuity": (u_x + v_y),
-                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.Re + txx_x + txy_y,
-                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.Re + tyx_x + tyy_y,})
+                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.conf.Re + txx_x + txy_y,
+                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.conf.Re + tyx_x + tyy_y,})
                 case _:
                     raise NotImplementedError(f"{self.conf['PINN_mode']} is not implemented yet")
             
@@ -696,65 +731,58 @@ class PINN(nn.Module):
         def get_boundary_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
             u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
                 slice_idxs, hess_samp, grads_samp, out_samp)
+            # TODO: denormalize here instead than inside single_sample
             if self.conf["flag_BC_PINN"]:
                 residuals = vmap(self.get_BC_residuals_single_sample)(
                     x_BC, x_mask_BC, u, v, p, u_x, v_y, p_x, p_y
                 )
-                return {"BC_"+k: v for k,v in residuals.items()}
+                return {"BC_"+k: v for k,v in residuals.items()}, (u_x, u_y, v_x, v_y)
             else:
                 return {}
 
+        # if sampling_points.shape[0]!=0:
+        assert sampling_points.shape[0]!=0, "No sense in using PINN if no sampling is done, use another model"
+
         residuals = {}
+        hess_samp, grads_samp, out_samp, out_sup = vmap(
+            compute_second_derivative, out_dims=(0,0,0,None), randomness="different")(
+                sampling_points, new_edges, 
+        )
+        
+        # if (tmp := torch.isnan(hess_samp).sum()) > 0:
+        #     print(f"hess_samp - {tmp} NaNs")
+        if (tmp := torch.isnan(grads_samp).sum()) > 0:
+            print(f"grads_samp - {tmp} NaNs")
+        if (tmp := torch.isnan(out_samp).sum()) > 0:
+            print(f"out_samp - {tmp} NaNs")
+        if (tmp := torch.isnan(out_sup).sum()) > 0:
+            print(f"out_sup - {tmp} NaNs")
 
-        need_second_derivative = False
-        need_first_derivative = False
-        if self.conf["flag_BC_PINN"]: need_first_derivative = True
-        match self.conf["PINN_mode"]:
-                case "supervised_only": pass
-                case "continuity_only": need_first_derivative = True
-                case "full_laminar": need_second_derivative = True
-
-        # TODO: improve this by not computing derivatives when they aren't needed
-        # if need_second_derivative or need_first_derivative:
-        if sampling_points.shape[0]!=0:
-            hess_samp, grads_samp, out_samp, out_sup = vmap(
-                compute_second_derivative, out_dims=(0,0,0,None), randomness="different")(
-                    sampling_points, new_edges, 
-            )
-            
-            # if (tmp := torch.isnan(hess_samp).sum()) > 0:
-            #     print(f"hess_samp - {tmp} NaNs")
-            if (tmp := torch.isnan(grads_samp).sum()) > 0:
-                print(f"grads_samp - {tmp} NaNs")
-            if (tmp := torch.isnan(out_samp).sum()) > 0:
-                print(f"out_samp - {tmp} NaNs")
-            if (tmp := torch.isnan(out_sup).sum()) > 0:
-                print(f"out_sup - {tmp} NaNs")
-
-            residuals.update(get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp))
-            
-            boundary_residuals = get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp)
-            
-            if boundary_residuals.get("BC_total", None) is not None:
-                residuals.update({"boundary": boundary_residuals.pop("BC_total")})
-                residuals.update({"debug_only_"+k: v for k, v in boundary_residuals.items()})
-
-        else:
-            out_sup = functional_call(
-                self.net,
-                model_params,
-                (x, x_mask, edge_index, edge_attr, pos, batch),
-            )
-
+        residuals.update(get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp))
+        
+        boundary_residuals, velocity_derivatives_at_B = get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp)
+        
+        if boundary_residuals.get("BC_total", None) is not None:
+            residuals.update({"boundary": boundary_residuals.pop("BC_total")})
+            residuals.update({"debug_only_"+k: v for k, v in boundary_residuals.items()})
+        
         if self.conf["general_sampling"]["add_edges"] and (domain_slice.shape[0] != 0):
             residuals.update({"output_sampled_domain": out_samp[domain_slice]})
 
-        return out_sup, residuals
+        return out_sup, residuals, velocity_derivatives_at_B 
+
+        # else:
+        #     out_sup = functional_call(
+        #         self.net,
+        #         model_params,
+        #         (x, x_mask, edge_index, edge_attr, pos, batch),
+        #     )
+        #     return out_sup
 
 
     def loss(self, pred:torch.Tensor, label:torch.Tensor, data: Optional[pyg_data.Data]=None):
 
-        out_supervised, residuals = pred
+        out_supervised, residuals = pred[0], pred[1]
         assert isinstance(out_supervised, torch.Tensor)
         assert isinstance(residuals, dict)
 
@@ -821,11 +849,37 @@ class PINN(nn.Module):
         optional_values = {}
         for k in residuals:
             if "debug_only_" in k:
-                optional_values[k] = residuals[k].abs().mean()
+                with torch.no_grad():
+                    k_to_log = k.removeprefix("debug_only_")
+                    tmp = residuals[k][residuals[k].nonzero()].abs().mean()
+                    optional_values[k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
+                    tmp_dict = {}
+                    for comp in set(self.conf.graph_node_features_not_for_training).difference([
+                            "component_id", "is_car", "is_flap", "is_tyre"]):
+                        correct_idxs = data.x_additional_boundary[:,self.conf.graph_node_features_not_for_training[comp]] == 1
+                        tmp = residuals[k][correct_idxs].abs().mean()
+                        
+                        optional_values[comp+"_"+k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
+                        tmp_dict[k_to_log] = optional_values[comp+"_"+k_to_log]
+                    optional_values[comp+"_total"] = sum(tmp_dict.values())
             else:
                 loss_dict[k] = residuals[k].abs().mean()
 
         return sum(loss_dict.values()), loss_dict, optional_values
 
 
+def plot_optional_values(optional_values):
+    tmp = {k:v.detach().numpy() for k,v in optional_values.items()}
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    df = pd.DataFrame([tmp], index=["A"])
+    df = df.sort_values(by="A", axis=1).astype(float)
+    
+    data = df.to_dict("records")[0]
+    names = list(data.keys())
+    values = list(data.values())
 
+    #tick_label does the some work as plt.xticks()
+    plt.bar(range(len(data)),values,tick_label=names)
+    plt.xticks(rotation=90)
+    plt.show()

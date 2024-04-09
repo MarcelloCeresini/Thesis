@@ -5,7 +5,7 @@ import torch_geometric.data as pyg_data
 from torch import vmap
 import numpy as np
 import wandb
-from utils import normalize_labels
+from utils import normalize_label
 
 class NormalizeLabels(BaseTransform):
     def __init__(self, conf) -> None:
@@ -13,7 +13,8 @@ class NormalizeLabels(BaseTransform):
         self.conf = conf
 
     def forward(self, data: torch.Any) -> torch.Any:
-        data = normalize_labels(data, self.conf)
+        for i, (values, label) in enumerate(zip(data.y.T, self.conf.labels_to_keep_for_training)):
+            data.y[:,i] = normalize_label(values, label, self.conf)
         return data
 
 
@@ -32,12 +33,13 @@ class RemoveTurbulentLabels(BaseTransform):
         return data
 
 class SampleDomainPoints(BaseTransform):
-    def __init__(self, conf) -> None:
+    def __init__(self, conf, test=False) -> None:
         super().__init__()
         self.domain_sampling = conf["domain_sampling"]
         self.general_sampling = conf["general_sampling"]
         self.num_labels = conf["output_dim"]
         self.n_sampled_new_edges = conf["n_sampled_new_edges"]
+        self.test=test
 
     def get_random_position_in_simplex(self, spatial_positions):
         '''Uniform sampling inside simplex --> each coordinate is the linear combination of
@@ -46,11 +48,15 @@ class SampleDomainPoints(BaseTransform):
             Since we cannot get different random inplace sampling with vmap, we exploit the inverse transform sampling
             https://en.wikipedia.org/wiki/Inverse_transform_sampling#Definition
             and sample x from a uniform to then transform it to an exponential by -ln(x)'''
-        eps = torch.finfo(torch.float64).eps
-        barycentric_coords = - torch.rand(3, 
-            device=spatial_positions.device, dtype=torch.float64).clamp(min=eps).log() 
-        barycentric_coords /= sum(barycentric_coords)
-        barycentric_coords = barycentric_coords.to(torch.float32)
+        match self.test:
+            case False:
+                eps = torch.finfo(torch.float64).eps
+                barycentric_coords = - torch.rand(3, 
+                    device=spatial_positions.device, dtype=torch.float64).clamp(min=eps).log() 
+                barycentric_coords /= sum(barycentric_coords)
+                barycentric_coords = barycentric_coords.to(torch.float32)
+            case True:
+                barycentric_coords = torch.ones(3, dtype=torch.float32) / 3
         return vmap(torch.dot, in_dims=(1,None))(spatial_positions, barycentric_coords)
 
 
@@ -72,29 +78,32 @@ class SampleDomainPoints(BaseTransform):
                 p = self.domain_sampling["percentage"]
                 num_samples = int(p * data.triangulated_cells.shape[0])
 
-                if self.general_sampling.get("use_sampling_weights", False): 
-                    # all of the sampling points then train on all labels, but the placement of the points is chosen
-                    # with an equally distributed number of samples for each label 
-                    num_samples_per_label = num_samples // self.num_labels
-                    num_samples = num_samples_per_label * self.num_labels
+                if not self.test:
+                    if self.general_sampling.get("use_sampling_weights", False): 
+                        # all of the sampling points then train on all labels, but the placement of the points is chosen
+                        # with an equally distributed number of samples for each label 
+                        num_samples_per_label = num_samples // self.num_labels
+                        num_samples = num_samples_per_label * self.num_labels
 
-                    # TODO: rescale the weights?
+                        # TODO: rescale the weights?
 
-                    idxs_domain_sampled_triangs = vmap(
-                        lambda x: torch.multinomial(x[data.idx_of_triangulated_cell], 
-                                                        num_samples_per_label, 
-                                                        replacement = (p/self.num_labels)>=1),
-                        in_dims=(1), randomness="different")(data.sampling_weights).view(-1)
+                        idxs_domain_sampled_triangs = vmap(
+                            lambda x: torch.multinomial(x[data.idx_of_triangulated_cell], 
+                                                            num_samples_per_label, 
+                                                            replacement = (p/self.num_labels)>=1),
+                            in_dims=(1), randomness="different")(data.sampling_weights).view(-1)
+                    else:
+                        idxs_domain_sampled_triangs = \
+                            torch.multinomial(torch.ones(data.triangulated_cells.shape[0], dtype=torch.float), 
+                                                num_samples, 
+                                                replacement = p>=1) # as np.random.choice
                 else:
-                    idxs_domain_sampled_triangs = \
-                        torch.multinomial(torch.ones(data.triangulated_cells.shape[0], dtype=torch.float), 
-                                            num_samples, 
-                                            replacement = p>=1) # as np.random.choice
+                    idxs_domain_sampled_triangs = torch.arange(data.triangulated_cells.shape[0])
 
                 counter_resampling = 0
                 while counter_resampling < 100:
                     domain_sampling_points = vmap(self.get_random_position_in_simplex, randomness="different") \
-                    (data.triangulated_cells[idxs_domain_sampled_triangs,...].to(torch.float32))
+                        (data.triangulated_cells[idxs_domain_sampled_triangs,...].to(torch.float32))
                 
                     if domain_sampling_points.isnan().sum() == 0:
                         break
@@ -168,10 +177,11 @@ class SampleDomainPoints(BaseTransform):
 
 
 class SampleBoundaryPoints(BaseTransform):
-    def __init__(self, conf) -> None:
+    def __init__(self, conf, test=False) -> None:
         super().__init__()
         self.boundary_sampling = conf["boundary_sampling"]
         self.feat_dict = conf["graph_node_feature_dict"]
+        self.test = test
 
     def get_random_position_on_face(self, x, pos):
         tangent_versor_x = x[self.feat_dict["tangent_versor_x"]]
@@ -191,30 +201,34 @@ class SampleBoundaryPoints(BaseTransform):
 
     def forward(self, data: pyg_data.Data) -> pyg_data.Data:
         idxs_is_BC = (data.x_mask[:,-1] == 1)
-        match self.boundary_sampling["mode"]:
-            case "all_boundary":
-                idxs_boundary_sampled = idxs_is_BC
-            case "percentage_of_boundary":
-                p = self.boundary_sampling["percentage"]
-                num_samples = int(p * idxs_is_BC.count_nonzero())
-                idxs_boundary_sampled = torch.multinomial(
-                    idxs_is_BC.to(torch.float), num_samples, 
-                    replacement = False if p<1 else True)
-            case _:
-                raise NotImplementedError("Only 'all' is implemented for now")
+        if not self.test:
+            match self.boundary_sampling["mode"]:
+                case "all_boundary":
+                    idxs_boundary_sampled = idxs_is_BC.nonzero().view(-1)
+                case "percentage_of_boundary":
+                    p = self.boundary_sampling["percentage"]
+                    num_samples = int(p * idxs_is_BC.count_nonzero())
+                    idxs_boundary_sampled = torch.multinomial(
+                        idxs_is_BC.to(torch.float), num_samples, 
+                        replacement = False if p<1 else True)
+                case _:
+                    raise NotImplementedError("Only 'all' is implemented for now")
+        else:
+            idxs_boundary_sampled = idxs_is_BC.nonzero().view(-1)
 
         # x_BC, x_mask_BC = data.x[idxs_boundary_sampled], data.x_mask[idxs_boundary_sampled]
         x_BC = data.x[idxs_boundary_sampled]
 
-        if self.boundary_sampling["shift_on_face"]:
+        if self.boundary_sampling["shift_on_face"] and not self.test:
             boundary_sampling_points = vmap(
                 self.get_random_position_on_face, randomness="different")(
                 x_BC, data.pos[idxs_boundary_sampled]
             )
             boundary_sampling_points = torch.concatenate(boundary_sampling_points, dim=1)
         else:
-            boundary_sampling_points = data.pos[idxs_boundary_sampled]
+            boundary_sampling_points = data.pos[idxs_boundary_sampled,:2]
         
         data.boundary_sampling_points = boundary_sampling_points
         data.idxs_boundary_sampled = idxs_boundary_sampled
+        data.x_additional_boundary = data.x_additional[idxs_boundary_sampled]
         return data

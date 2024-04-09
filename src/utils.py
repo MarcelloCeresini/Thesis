@@ -3,6 +3,7 @@ import pickle
 from typing import Literal, Optional, Union
 import itertools
 
+from tqdm import tqdm
 import wandb
 import meshio
 import pyvista
@@ -15,12 +16,12 @@ import torch
 from torch_geometric.data import Data, HeteroData
 import pandas as pd
 from circle_fit import hyperLSQ
-import torch
 from torch_geometric.data import Data
 from scipy.spatial.distance import cdist
 from torch_geometric.utils import to_dense_adj
 from rustworkx import PyGraph
 from rustworkx import distance_matrix
+from torch import vmap
 
 from config_pckg.config_file import Config
 import read_mesh_meshio_forked
@@ -287,8 +288,8 @@ def face_id_inside_faceblock_to_mesh_face_id(face_id_inside_faceblock, faceblock
 def shoelace(coords):
     idx_x = np.arange(coords.shape[0]-1)
     idx_y = idx_x+1
-
     return np.abs(np.sum(coords[idx_x,0]*coords[idx_y,1]) - coords[-1,0]*coords[0,1]) / 2
+
 
 def get_cell_data(mesh: meshio.Mesh, conf: Config):
     '''
@@ -340,7 +341,7 @@ def get_face_data(face_mesh: meshio.Mesh, vertices_in_cells):
 
 def get_labels(positions, csv_filename, conf, check_biunivocity):
     '''Returns a [len(positions), N_features] matrix'''
-    eps = conf.epsilon_for_point_matching
+    # eps = conf.epsilon_for_point_matching
 
     features = pd.read_csv(csv_filename)
     features.columns = [f_name.strip() for f_name in features.columns]
@@ -356,8 +357,8 @@ def get_labels(positions, csv_filename, conf, check_biunivocity):
         ord_features, features_old_idxs = sort_matrix(features[conf.features_coordinates].to_numpy())
         
         for i, (pos_old_idx, ft_old_idx, pos) in enumerate(zip(pos_old_idxs,
-                                                          features_old_idxs,
-                                                          ord_pos)):
+                                                            features_old_idxs,
+                                                            ord_pos)):
             map_pos_to_feature[i, 0], map_pos_to_feature[i, 1] = pos_old_idx, features_old_idxs[np.argmin(cdist([pos], ord_features)[0])]
         # features_bounds = np.sort(np.stack([ord_features*(1-eps), ord_features*(1+eps)]), axis=0)
         # features_bound_1 = features_bounds[0,...]
@@ -381,9 +382,8 @@ def get_labels(positions, csv_filename, conf, check_biunivocity):
         #         if not found:
         #             raise ValueError("Points do not correspond")
                 
-        if check_biunivocity:
-            assert len(np.unique(map_pos_to_feature[:,0])) == len(map_pos_to_feature), "Not biunivocal, for some mesh point there is no correspondance in features"
-            assert len(np.unique(map_pos_to_feature[:,1])) == len(map_pos_to_feature), "Not biunivocal, for some feature points there is no correspondant mesh point"
+        assert len(np.unique(map_pos_to_feature[:,0])) == len(map_pos_to_feature), "Not biunivocal, for some mesh point there is no correspondance in features"
+        assert len(np.unique(map_pos_to_feature[:,1])) == len(map_pos_to_feature), "Not biunivocal, for some feature points there is no correspondant mesh point"
         
         map_pos_to_feature, _ = sort_matrix(map_pos_to_feature)
         map_pos_to_feature = map_pos_to_feature[:,1].astype(np.int64)
@@ -454,141 +454,90 @@ def normalize_features(features, conf):
             raise NotImplementedError("Only implemented 'None' and 'Physical'")
 
 
-def normalize_labels(data, conf):
-    labels_to_keep_for_training = conf["labels_to_keep_for_training"]
+def normalize_label(values, label, conf):
     label_normalization_mode = conf["label_normalization_mode"]
-    v_inlet = conf["air_speed"] 
     dict_labels_train = conf["dict_labels_train"] 
 
-    if isinstance(data, dict):
-        tmp = torch.tensor([data[k] for k in labels_to_keep_for_training])
-    else: # graph
-        tmp = data.y.T
+    # TODO: maybe add a graph-wise norm?
+    match label_normalization_mode[label]["main"]:
+        case "physical":
+            if label in ["x-velocity", "y-velocity"]:
+                tmp = values / conf["air_speed"]
+            elif label == "pressure":
+                tmp = values / (conf["air_speed"]**2)/2
+            else:
+                raise ValueError(f"Physical normalization no available for {label}")
+        case "max-normalization":
+            if (label in ["x-velocity", "y-velocity"]) and \
+                    label_normalization_mode[label].get("magnitude", False):
+                tmp = values / dict_labels_train["max_magnitude"]["v_mag"]
+            else:
+                tmp = values / dict_labels_train["max_magnitude"][label]
 
-    for column, label in zip(tmp, labels_to_keep_for_training):
-
-        # TODO: maybe add a graph-wise norm?
-        match label_normalization_mode[label]["main"]:
-            case "physical":
-                if label in ["x-velocity", "y-velocity"]:
-                    column /= v_inlet
-                elif label == "pressure":
-                    column /= (v_inlet**2)/2
-                else:
-                    raise ValueError(f"Physical normalization no available for {label}")
-            case "max-normalization":
-                if (label in ["x-velocity", "y-velocity"]) and \
-                        label_normalization_mode[label].get("magnitude", False):
-                    column /= dict_labels_train["max_magnitude"]["v_mag"]
-                else:
-                    column /= dict_labels_train["max_magnitude"][label]
-
-            case "standardization":
-                if (label in ["x-velocity", "y-velocity"]) and \
-                        label_normalization_mode[label].get("magnitude", False):
-                    column = (column-dict_labels_train["mean"]["v_mag"])/ \
-                        dict_labels_train["std"]["v_mag"]
-                else:
-                    column = (column-dict_labels_train["mean"][label])/ \
-                        dict_labels_train["std"][label]
-            case _:
-                raise NotImplementedError()
+        case "standardization":
+            if (label in ["x-velocity", "y-velocity"]) and \
+                    label_normalization_mode[label].get("magnitude", False):
+                tmp = (values-dict_labels_train["mean"]["v_mag"])/ \
+                    dict_labels_train["std"]["v_mag"]
+            else:
+                tmp = (values-dict_labels_train["mean"][label])/ \
+                    dict_labels_train["std"][label]
+        case _:
+            raise NotImplementedError()
     
-    if isinstance(data, dict):
-        return tmp
-    else: # graph
-        data.y = tmp.T
-        return data
+    return tmp
 
-        # if self.conf.label_normalization_mode["graph_wise"]:
-        #     v_mag = np.linalg.norm(data.y[["x-velocity", "y-velocity"]], axis=1)
-        #     v_mag_mean, v_mag_std = v_mag.mean(), v_mag.std()
-        #     vx_mean, vx_std = data.y["x-velocity"].mean(), data.y["x-velocity"].std()
-        #     vy_mean, vy_std = data.y["y-velocity"].mean(), data.y["y-velocity"].std()
-        #     p_mean, p_std = data.y["pressure"].mean(), data.y["pressure"].std()
-        # else: # else it is dataset_wise
-        #     v_mag_mean, v_mag_std = self.conf.dict_labels_train["mean"]["v_mag"], conf.train_set_normalization_constants["v_mag_std"]
-        #     vx_mean, vx_std = self.conf.dict_labels_train["mean"]["v_mag"], conf.train_set_normalization_constants["vx_std"]
-        #     vy_mean, vy_std = self.conf.dict_labels_train["mean"]["v_mag"], conf.train_set_normalization_constants["vy_std"]
-        #     p_mean, p_std = self.conf.dict_labels_train["mean"]["v_mag"], conf.train_set_normalization_constants["p_std"]
 
-        # if conf_dict["no_shift"]:
-        #     v_mag_mean = 0
-        #     vx_mean = 0
-        #     vy_mean = 0
-        #     p_mean = 0
-
-        # match conf_dict["main"]:
-        #     case "None":
-        #         return labels
-        #     case "Z-Normalization":
-        #         labels["pressure"] = (labels["pressure"]-p_mean)/p_std
-        #         match conf_dict["velocity_mode"]:
-        #             case "component_wise":
-        #                 labels["x-velocity"] = (labels["x-velocity"]-vx_mean)/vx_std
-        #                 labels["y-velocity"] = (labels["y-velocity"]-vy_mean)/vy_std
-        #                 return labels
-        #             case "magnitude_wise":
-        #                 v_mag_norm = (v_mag-v_mag_mean)/v_mag_std
-        #                 labels["x-velocity"] = (labels["x-velocity"]/v_mag)*v_mag_norm    # inside parentheses it becomes "versor component", then you renormalize it with the product
-        #                 labels["y-velocity"] = (labels["y-velocity"]/v_mag)*v_mag_norm
-        #             case _:
-        #                 raise NotImplementedError()
-        #         return labels
-        #     case "Physical":
-        #         labels[["x-velocity", "y-velocity"]] /= conf.air_speed
-        #         labels["pressure"] /= (conf.air_speed**2)/2
-        #         return labels
-        #     case _:
-        #         raise NotImplementedError()
-
-def denormalize_labels(labels, conf):
+def denormalize_label(values, label, conf):
     '''
     Connected to NormalizeLabels augmentation
     '''
     label_normalization_mode = conf["label_normalization_mode"]
     dict_labels_train = conf["dict_labels_train"] 
-    for column, label in zip(labels.T, conf["labels_to_keep_for_training"]):
 
-        # TODO: maybe add a graph-wise norm?
-        match label_normalization_mode[label]["main"]:
-            case "physical":
-                if label in ["x-velocity", "y-velocity"]:
-                    column *= conf["air_speed"]
-                elif label == "pressure":
-                    column *= (conf["air_speed"]**2)/2
-                else:
-                    raise ValueError(f"Physical normalization no available for {label}")
-            case "max-normalization":
-                if (label in ["x-velocity", "y-velocity"]) and \
-                        label_normalization_mode[label].get("magnitude", False):
-                    column *= dict_labels_train["max_magnitude"]["v_mag"]
-                else:
-                    column *= dict_labels_train["max_magnitude"][label]
+    match label_normalization_mode[label]["main"]:
+        case "physical":
+            if label in ["x-velocity", "y-velocity"]:
+                values *= conf["air_speed"]
+            elif label == "pressure":
+                values *= (conf["air_speed"]**2)/2
+            else:
+                raise ValueError(f"Physical normalization no available for {label}")
+        case "max-normalization":
+            if (label in ["x-velocity", "y-velocity"]) and \
+                    label_normalization_mode[label].get("magnitude", False):
+                values *= dict_labels_train["max_magnitude"]["v_mag"]
+            else:
+                values *= dict_labels_train["max_magnitude"][label]
 
-            case "standardization":
-                if (label in ["x-velocity", "y-velocity"]) and \
-                        label_normalization_mode[label].get("magnitude", False):
-                    column = column*dict_labels_train["std"]["v_mag"]+ \
-                                dict_labels_train["mean"]["v_mag"]
-                else:
-                    column = column*dict_labels_train["std"][label]+\
-                              dict_labels_train["mean"][label]
-            case _:
-                raise NotImplementedError()
+        case "standardization":
+            if (label in ["x-velocity", "y-velocity"]) and \
+                    label_normalization_mode[label].get("magnitude", False):
+                values = values*dict_labels_train["std"]["v_mag"]+ \
+                            dict_labels_train["mean"]["v_mag"]
+            else:
+                values = values*dict_labels_train["std"][label]+\
+                            dict_labels_train["mean"][label]
+        case _:
+            raise NotImplementedError()
         
-    return labels
+    return values
 
 
-def plot_gt_pred_label_comparison(data: Data, pred: torch.Tensor, conf, run_name: Optional[str]= None):
+def plot_gt_pred_label_comparison(data: Data, model_output, conf, run_name: Optional[str]= None):
     data.name = data.name.removesuffix("_ascii.msh")
     with open(os.path.join(conf["EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS"], data.name+".pkl"), "rb") as f:
         meshCI = pickle.load(f)
         
     print(f"Plotting {meshCI.name}")
-    pred = denormalize_labels(pred, conf)
+    pred_labels = model_output[0].detach().numpy()
+    pred = np.zeros_like(pred_labels)
+    for i, (values, label) in enumerate(zip(pred_labels.T, conf.labels_to_keep_for_training)):
+        pred[:,i] = denormalize_label(values, label, conf)
+    
     meshCI.set_conf(conf)
-    meshCI.plot_mesh(labels=pred, run_name = run_name, conf=conf)
+    # meshCI.plot_mesh(labels=pred, run_name = run_name, conf=conf)
+    meshCI.plot_all_results(data, (pred, model_output[1]), run_name = run_name, conf=conf)
 
 
 def get_inward_normal_areas(
@@ -599,6 +548,7 @@ def get_inward_normal_areas(
         CcFc_edges,
         cell_center_positions,
         face_center_positions,):
+    '''Inward = going away from fluid bulk, towards inside of boundary'''
 
     faces_x_component = faces_x_component[faces_idxs]
     faces_y_component = faces_y_component[faces_idxs]
@@ -622,19 +572,85 @@ def get_inward_normal_areas(
     return inward_normals*face_areas[faces_idxs].view(-1,1).repeat(1,2)
 
 
-def get_forces(conf:Config, data:Data, pressure_values):
-
+def get_forces(
+        conf:Config, 
+        data:Data, 
+        pressure_values, 
+        velocity_derivatives=None, 
+        turbulent_values=None,
+        denormalize=False,
+        from_boundary_sampling=False):
+    
     flap_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_flap"]].nonzero()[:,0]
     tyre_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_tyre"]].nonzero()[:,0]
-    return_dict = {
-        "flap": torch.sum((data.inward_normal_areas[flap_faces]*
-                                pressure_values[flap_faces].view(-1,1).repeat(1,2)), dim=0),
-        "tyre": torch.sum((data.inward_normal_areas[tyre_faces]*
-                                pressure_values[tyre_faces].view(-1,1).repeat(1,2)), dim=0),}
 
-    return_dict["car"] = sum(return_dict.values())
+    if denormalize:
+        pressure_values = denormalize_label(pressure_values, "pressure", conf)
+    pressure_forces_flap = torch.sum((data.inward_normal_areas[flap_faces]*
+                                pressure_values[flap_faces].view(-1,1).repeat(1,2)), dim=0)
+    pressure_forces_tyre = torch.sum((data.inward_normal_areas[tyre_faces]*
+                                pressure_values[tyre_faces].view(-1,1).repeat(1,2)), dim=0)
     
-    return return_dict
+    shear_stress_flap = torch.tensor((0.,0.))
+    shear_stress_tyre = torch.tensor((0.,0.))
+    if velocity_derivatives is not None:
+        assert turbulent_values is not None, "Cannot compute forces without turbulent values"
+
+        if from_boundary_sampling:
+            idxs_is_BC = (data.x_mask[:,-1] == 1)
+            flap_faces_vel = data.x_additional[idxs_is_BC, conf.graph_node_features_not_for_training["is_flap"]].nonzero()[:,0]
+            tyre_faces_vel = data.x_additional[idxs_is_BC, conf.graph_node_features_not_for_training["is_tyre"]].nonzero()[:,0]
+            u_x, u_y, v_x, v_y = velocity_derivatives
+        else:
+            u_x, u_y, v_x, v_y = velocity_derivatives[:,0], velocity_derivatives[:,1], velocity_derivatives[:,2], velocity_derivatives[:,3]
+            flap_faces_vel = flap_faces
+            tyre_faces_vel = tyre_faces
+
+        if denormalize:
+            u_x, u_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u_x, u_y)), "x-velocity", conf)
+            v_x, v_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v_x, v_y)), "y-velocity", conf)
+            k = denormalize_label(turbulent_values[:,0], "turb-kinetic-energy", conf)
+            w = denormalize_label(turbulent_values[:,1], "turb-kinetic-energy", conf)
+            k, w = torch.clamp(k, min=0), torch.clamp(w, min=conf.w_min_for_clamp)
+        else:
+            # If there is no need to denormalize, it means it comes from csv --> no need to clamp
+            k, w = turbulent_values[:,0], turbulent_values[:,1]
+            
+        viscosity = (conf.air_kinematic_viscosity + k/w).view(-1,1).repeat(1,2) # FIXME: constants
+
+        def compute_stress_euclidian_components(idxs, idxs_vel, viscosity, inward_normal_areas, u_x, u_y, v_x, v_y, k):
+                '''(jacU + jacU.T) dot n --> gives a tensor of stresses, we need the x and y component of its tangent part'''
+                # FIXME: constants + physics
+                k, viscosity = k[idxs], viscosity[idxs]
+                n_x, n_y = inward_normal_areas[idxs, 0], inward_normal_areas[idxs, 1]
+                u_x, u_y, v_x, v_y = u_x[idxs_vel], u_y[idxs_vel], v_x[idxs_vel], v_y[idxs_vel]
+                # TODO: do i need to sum normal stress from newton law with reynold's stress?
+                # TODO: STILL NEED TO TAKE THE TANGENT FIRST!
+                x_comp = 2*n_x*u_x + n_y*(u_x+v_y) # x component of stress vector (without turbulence)
+                y_comp = 2*n_y*u_y + n_x*(u_x+v_y) # y component of stress vector (without turbulence)
+                # x_comp = 2*n_x*(u_x-k/3) + n_y*(u_x+v_y) # x component of stress vector
+                # y_comp = 2*n_y*(u_y-k/3) + n_x*(u_x+v_y) # y component of stress vector
+                return torch.stack((x_comp, y_comp)).T*viscosity
+
+        shear_stress_flap = torch.sum(compute_stress_euclidian_components(
+            flap_faces, flap_faces_vel, viscosity, data.inward_normal_areas, u_x, u_y, v_x, v_y, k
+        ), dim=0)
+
+        shear_stress_tyre = torch.sum(compute_stress_euclidian_components(
+            tyre_faces, tyre_faces_vel, viscosity, data.inward_normal_areas, u_x, u_y, v_x, v_y, k
+        ), dim=0)
+    
+    pressure_forces = {
+        "flap": pressure_forces_flap,
+        "tyre": pressure_forces_tyre,}
+    pressure_forces["car"] = sum(pressure_forces.values())
+
+    shear_stress_forces = {
+        "flap": shear_stress_flap,
+        "tyre": shear_stress_tyre,}
+    shear_stress_forces["car"] = sum(shear_stress_forces.values())
+    
+    return pressure_forces, shear_stress_forces
 
 
 class MeshCompleteInfo:
@@ -668,7 +684,7 @@ class MeshCompleteInfo:
         self.CcFc_edges = CcFc_edges
         self.face_areas = face_areas
 
-        self.face_center_features, self.face_center_features_mask, self.face_center_additional_features,  self.inlet_points_positions = \
+        self.face_center_features, self.face_center_features_mask, self.face_center_additional_features, self.inlet_points_positions = \
             self.get_face_BC_attributes()
         
         self.dist_from_BC = None
@@ -757,9 +773,10 @@ class MeshCompleteInfo:
                         obj[column] = labels[:,i]
 
 
-    def get_face_BC_attributes(self):
-
-        conf: Config = self.conf
+    def get_face_BC_attributes(self, conf:Optional[Config]=None):
+        if conf is None:
+            conf: Config = self.conf
+        
         mesh, face_center_positions, vertices_in_faces, face_areas = \
             self.mesh, self.face_center_positions, self.vertices_in_faces, self.face_areas
         
@@ -776,8 +793,10 @@ class MeshCompleteInfo:
         face_spatial_dir_norm = np.array([vec/np.linalg.norm(vec) for vec in face_spatial_dir])
 
         # face tangent versor components (x, y)
-        face_center_attr_BC[:,conf.graph_node_feature_dict["tangent_versor_x"]] = face_spatial_dir_norm[:,0]
-        face_center_attr_BC[:,conf.graph_node_feature_dict["tangent_versor_y"]] = face_spatial_dir_norm[:,1]
+        tmp = face_spatial_dir_norm[:,0]
+        face_center_attr_BC[:,conf.graph_node_feature_dict["tangent_versor_x"]] = np.where(tmp>=0, face_spatial_dir_norm[:,0], -face_spatial_dir_norm[:,0])
+        face_center_attr_BC[:,conf.graph_node_feature_dict["tangent_versor_y"]] = np.where(tmp>=0, face_spatial_dir_norm[:,1], -face_spatial_dir_norm[:,1])
+        # face_center_attr_BC[:,conf.graph_node_feature_dict["tangent_versor_angle"]] = np.arctan2(face_spatial_dir_norm[:,1], face_spatial_dir_norm[:,0])/np.pi
         face_center_attr_BC[:, conf.graph_node_feature_dict["face_area"]] = face_areas
 
         elem_info = mesh.info["elements"]
@@ -806,24 +825,29 @@ class MeshCompleteInfo:
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["dp_dn"]] = True
 
                     if "ground" in name: # same tangential velocity as the air entering the domain
-                        direction = face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["tangent_versor_x"]]
-                        if conf.flag_directional_BC_velocity:
-                            face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed * np.sign(direction)
-                        else:
-                            face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed
-
+                        face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["ground"]] = True
+                        face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_x"]] = 1
+                        face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_y"]] = 0
+                        face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = conf.air_speed
                         face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_t"]] = True
 
                     elif "tyre" in name: # in 2D, it rotates around the center with angular speed omega
+                        face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["tyre"]] = True
                         Cx, Cy, R, sigma = hyperLSQ(points_of_faceblock_positions[:,:2])
                         omega = conf.air_speed / R
                         rays = face_center_positions[faces_of_faceblock_idxs][:,:2] - [Cx, Cy]
                         direction = np.cross(face_center_attr_BC[faces_of_faceblock_idxs,:2], rays)
 
-                        if conf.flag_directional_BC_velocity:
-                            v_t = np.linalg.norm(rays, axis=1) * omega * np.sign(direction) # v_t = r * omega
-                        else:
-                            v_t = np.linalg.norm(rays, axis=1) * omega
+                        # for all faces, x_tangent versor is positive. Except here, where the tyre is rotating, we add information
+                        # and give the correct tangent feature according to the rotation
+                        face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_x"]] = np.where(direction>=0, 
+                            face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_x"]],
+                            -face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_x"]])
+                        face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_y"]] = np.where(direction>=0, 
+                            face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_y"]],
+                            -face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_y"]])
+
+                        v_t = np.linalg.norm(rays, axis=1) * omega
 
                         # TODO: do we add a np.dot(v_t, face_spatial_dir_norm[:,:2]) to only get the component really tangent?
                         ### OSS: mean angle deviation is ~ 0.00116
@@ -840,6 +864,11 @@ class MeshCompleteInfo:
                         face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["is_car"]] = 1
                         face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["is_tyre"]] = 1
                     elif any(x in name for x in ["w0", "default-exterior"]): # fixed wall, doesn't move
+                        if "w0" in name:
+                            face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["main_flap"]] = True
+                        else:
+                            face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["second_flap"]] = True
+
                         face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
                         face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_t"]] = True
 
@@ -848,18 +877,45 @@ class MeshCompleteInfo:
                     else:
                         raise NotImplementedError(f"Didn't implement this kind of wall yet: {name}")
                 case 5: # pressure-outlet
+
+                    # vertical, going up
+                    face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_x"]] = 0
+                    face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_y"]] = 1
+
+                    face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["p_outlet"]] = True
                     face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["p"]] = conf.relative_atmosferic_pressure
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["p"]] = True
                     face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dv_dn"]] = 0
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["dv_dn"]] = True
                 case 7: # simmetry, normal derivative = 0
+                    
+                    # TODO: to follow better the tyre, we could go up if left of the tyre and down if right of the tyre
+                    face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_x"]] = np.where(
+                        face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_x"]] > 0.8,
+                        1,  # horizontal
+                        0   # vertical
+                    )
+
+                    face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_y"]] = np.where(
+                        face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_y"]] > 0.8,
+                        1,  # vertical, going up
+                        0   # horizontal
+                    )
+
+                    face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["simmetry"]] = True
                     face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = 0
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_n"]] = True
                     
                     face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["dp_dn"]] = 0
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["dp_dn"]] = True
                 case 10: # velocity_inlet
+
+                    # vertical, going up
+                    face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_x"]] = 0
+                    face_center_attr_BC[faces_of_faceblock_idxs,conf.graph_node_feature_dict["tangent_versor_y"]] = 1
+
                     inlet_points.append(points_of_faceblock_positions)
+                    face_center_additional_attrs[faces_of_faceblock_idxs, conf.graph_node_features_not_for_training["v_inlet"]] = True
                     face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_t"]] = 0
                     face_center_attr_BC_mask[faces_of_faceblock_idxs, conf.graph_node_feature_mask["v_t"]] = True
                     face_center_attr_BC[faces_of_faceblock_idxs, conf.graph_node_feature_dict["v_n"]] = conf.air_speed
@@ -1234,6 +1290,206 @@ class MeshCompleteInfo:
                             
 
 
+    def plot_all_results(self, data, model_output, run_name, conf):
+        # if self.vertex_labels is not None:
+        #     vertex_pyv_mesh = toughio.from_meshio(self.mesh).to_pyvista()
+        labels = model_output[0]
+
+        face_list_for_pyvista = np.concatenate(
+                [[len(v), *v] for v in self.vertices_in_faces]
+            )
+        facetype_list_for_pyvista = [pyvista.CellType.LINE for _ in self.vertices_in_faces]
+
+        face_pyv_mesh = pyvista.UnstructuredGrid(
+                            face_list_for_pyvista,
+                            facetype_list_for_pyvista,
+                            self.mesh.points
+                        )
+        
+        cell_list_for_pyvista = np.concatenate(
+                    [[len(v), *v] for v in self.vertices_in_cells]
+                )
+
+        celltype_list_for_pyvista = [pyvista.CellType.POLYGON for _ in self.vertices_in_cells]
+
+        cell_pyv_mesh = pyvista.UnstructuredGrid(
+            cell_list_for_pyvista,
+            celltype_list_for_pyvista,
+            self.mesh.points,
+        )
+
+        self.faces_in_cells = pd.DataFrame(data=self.CcFc_edges, columns=["cell_idx", "face_idx"]).groupby("cell_idx")["face_idx"].apply(list)
+        # TODO: improve from mean to weighted avg depending on distance
+        self.cell_center_labels = pd.DataFrame(
+            [np.mean(self.face_center_labels.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
+        )
+
+        ### comparison labels
+        columns = conf["labels_to_keep_for_training"]
+        face_pred_labels = pd.DataFrame(labels, columns=columns)
+        cell_pred_lables = pd.DataFrame(
+            [np.mean(face_pred_labels.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
+        )
+
+        for i, lab in enumerate(columns):
+            cell_pyv_mesh.cell_data[lab] = self.cell_center_labels[lab]
+            cell_pyv_mesh.cell_data[lab+"_pred"] = cell_pred_lables[lab]
+            cell_pyv_mesh.cell_data[lab+"_diff"] = self.cell_center_labels[lab] - cell_pred_lables[lab]
+            face_pyv_mesh.cell_data[lab] = self.face_center_labels[lab]
+            face_pyv_mesh.cell_data[lab+"_pred"] = face_pred_labels[lab]
+            face_pyv_mesh.cell_data[lab+"_diff"] = self.face_center_labels[lab] - face_pred_labels[lab]
+
+        off_screen = True
+        pl = pyvista.Plotter(shape=(3, len(columns)), off_screen=off_screen)
+        for i, lab in enumerate(columns):
+            pl.subplot(0,i)
+            pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab, 
+                lighting=False, 
+                scalar_bar_args={"title":f"GT_{lab}"},
+                cmap="Spectral")
+            pl.camera_position = "xy"
+
+            pl.subplot(1,i)
+            pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_pred", 
+                lighting=False, 
+                scalar_bar_args={"title":f"PRED_{lab}"}, 
+                cmap="Spectral")
+            pl.camera_position = "xy"
+
+            pl.subplot(2,i)
+            pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_diff", 
+                lighting=False, 
+                scalar_bar_args={"title":f"DIFF_{lab}"}, 
+                cmap="Spectral")
+            pl.camera_position = "xy"
+        pl.link_views()
+        if not os.path.isdir(self.conf["test_htmls_comparisons"]):
+            os.mkdir(self.conf["test_htmls_comparisons"])
+        if not os.path.isdir(self.conf["test_imgs_comparisons"]):
+            os.mkdir(self.conf["test_imgs_comparisons"])
+
+        if not os.path.isdir(os.path.join(self.conf["test_htmls_comparisons"], run_name)):
+            os.mkdir(os.path.join(self.conf["test_htmls_comparisons"], run_name))
+        if not os.path.isdir(os.path.join(self.conf["test_imgs_comparisons"], run_name)):
+            os.mkdir(os.path.join(self.conf["test_imgs_comparisons"], run_name))
+
+        pl.camera.zoom(1.6)
+        pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_cell.html"))
+        pl.screenshot(
+            filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_cell.png"),
+            window_size=(1920,1200))
+
+        pl = pyvista.Plotter(shape=(3, len(columns)), off_screen=off_screen)
+        for i, lab in enumerate(columns):
+            pl.subplot(0,i)
+            pl.add_mesh(face_pyv_mesh.copy(), scalars=lab, 
+                lighting=False, 
+                scalar_bar_args={"title":f"GT_{lab}"},
+                cmap="Spectral")
+            pl.camera_position = "xy"
+
+            pl.subplot(1,i)
+            pl.add_mesh(face_pyv_mesh.copy(), scalars=lab+"_pred", 
+                lighting=False, 
+                scalar_bar_args={"title":f"PRED_{lab}"}, 
+                cmap="Spectral")
+            pl.camera_position = "xy"
+
+            pl.subplot(2,i)
+            pl.add_mesh(face_pyv_mesh.copy(), scalars=lab+"_diff", 
+                lighting=False, 
+                scalar_bar_args={"title":f"DIFF_{lab}"}, 
+                cmap="Spectral")
+            pl.camera_position = "xy"
+        pl.link_views()
+        pl.camera.zoom(1.6)
+        pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_face.html"))
+        pl.screenshot(
+            filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_face.png"),
+            window_size=(1920,1200))
+
+        ### residuals on boundaries
+        flag_boundaries = False
+        idxs_is_BC = (data.x_mask[:,-1] == 1)
+        
+        for k, v in model_output[1].items():
+            v = v.detach().numpy()
+            if v.shape[0] == idxs_is_BC.sum():
+                new_k = k.removeprefix("debug_only_")
+                tmp = np.zeros_like(face_pyv_mesh.cell_data["pressure"])
+                tmp[idxs_is_BC] = v
+                face_pyv_mesh.cell_data[new_k] = tmp
+                flag_boundaries = True
+
+        if flag_boundaries:
+            cmap = "Greys"
+            pl = pyvista.Plotter(shape=(2, 3), off_screen=off_screen)
+            pl.subplot(0,0)
+            pl.add_mesh(face_pyv_mesh.copy(), lighting=False, cmap=cmap, 
+                        scalars="boundary", scalar_bar_args={"title":"Total BC residual"},)
+            pl.camera_position = "xy"
+
+            pl.subplot(0,1)
+            pl.add_mesh(face_pyv_mesh.copy(), lighting=False, cmap=cmap, 
+                        scalars="BC_v_t", scalar_bar_args={"title":"Component: v_t"},)
+            pl.camera_position = "xy"
+
+            pl.subplot(0,2)
+            pl.add_mesh(face_pyv_mesh.copy(), lighting=False, cmap=cmap, 
+                        scalars="BC_v_n", scalar_bar_args={"title":"Component: v_n"},)
+            pl.camera_position = "xy"
+
+            pl.subplot(1,0)
+            pl.add_mesh(face_pyv_mesh.copy(), lighting=False, cmap=cmap, 
+                        scalars="BC_p", scalar_bar_args={"title":"Component: p"},)
+            pl.camera_position = "xy"
+
+            pl.subplot(1,1)
+            pl.add_mesh(face_pyv_mesh.copy(), lighting=False, cmap=cmap, 
+                        scalars="BC_dv_dn", scalar_bar_args={"title":"Component: dv_dn"},)
+            pl.camera_position = "xy"
+
+            pl.subplot(1,2)
+            pl.add_mesh(face_pyv_mesh.copy(), lighting=False, cmap=cmap, 
+                        scalars="BC_dp_dn", scalar_bar_args={"title":"Component: dp_dn"},)
+            pl.camera_position = "xy"
+            pl.link_views()
+
+            pl.camera.zoom(1.6)
+            pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_boundaries.html"))
+            pl.screenshot(
+                filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_boundaries.png"),
+                window_size=(1920,1200))
+        
+        ### residuals on domain 
+        # # change this
+        cell_shape = cell_pyv_mesh.cell_data["pressure"].shape[0]
+        tmp_idx = data.idx_of_triangulated_cell.detach().numpy()
+        present_residuals_domain = []
+        for k, v in model_output[1].items():
+            v = np.abs(v.detach().numpy())
+            if v.shape[0] == tmp_idx.shape[0] and len(v.shape)==1:
+                tmp = [np.mean(v[tmp_idx[i]]) for i in range(cell_shape)]
+                cell_pyv_mesh.cell_data[k] = tmp
+                present_residuals_domain.append(k)
+        
+        if len(present_residuals_domain) > 0:
+            cmap = "Greys"
+            pl = pyvista.Plotter(shape=(1, len(present_residuals_domain)), off_screen=off_screen)
+            
+            for i, k in enumerate(present_residuals_domain):
+                pl.subplot(0,i)
+                pl.add_mesh(cell_pyv_mesh.copy(), lighting=False, cmap=cmap, 
+                            scalars=k, scalar_bar_args={"title":f"Domain residual: {k}"},)
+                pl.camera_position = "xy"
+
+            pl.link_views()
+            pl.camera.zoom(1.6)
+            pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_domain_res.html"))
+            pl.screenshot(
+                filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_domain_res.png"),
+                window_size=(1920,1200))
+
 def print_memory_state_gpu(text, conf):
     if conf.device == "cuda":
         print(f"{text} - Alloc: {torch.cuda.memory_allocated()/1024**3:.2f}Gb - Reserved: {torch.cuda.memory_reserved()/1024**3:.2f}Gb")
@@ -1244,6 +1500,7 @@ def get_input_to_model(batch):
     return {
         "x": batch.x,
         "x_mask": batch.x_mask,
+        "x_additional": batch.x_additional,
         "edge_index": batch.edge_index,
         "edge_attr": batch.edge_attr,
         "batch": batch.batch,
@@ -1253,6 +1510,7 @@ def get_input_to_model(batch):
         "idxs_boundary_sampled": getattr(batch, "idxs_boundary_sampled", None),
         "new_edges": getattr(batch, "new_edges", None),
         "new_edge_attributes": getattr(batch, "new_edge_attributes", None),
+        "x_additional_boundary": getattr(batch, "x_additional_boundary", None),
     }
 
 
@@ -1319,6 +1577,8 @@ def convert_mesh_complete_info_obj_to_graph(
 
             tmp = meshCI.face_center_labels
             data.y = torch.tensor(tmp[conf.labels_to_keep_for_training].values, dtype=torch.float32)
+            remaining_columns = sorted(set(conf.features_to_keep).difference(conf.labels_to_keep_for_training))
+            data.y_additional = torch.tensor(tmp[remaining_columns].values, dtype=torch.float32)
             # data.y_mask = torch.tensor(np.ones([n_faces, face_label_dim]), dtype=torch.bool)
             # data.turbolence = torch.tensor(tmp[conf.labels_to_keep_for_training_turbulence].values, dtype=torch.float32)
 
@@ -1334,7 +1594,8 @@ def convert_mesh_complete_info_obj_to_graph(
                 cell_center_positions=meshCI.cell_center_positions,
                 face_center_positions=meshCI.face_center_positions,)
 
-            data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2])
+            data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2],
+                velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
             data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
             
             tmp1, tmp2 = meshCI.get_triangulated_cells()
@@ -1417,3 +1678,18 @@ def convert_mesh_complete_info_obj_to_graph(
         torch.save(data, filename_output_graph)
 
     return data
+
+
+def plot_test_images_from_model(conf, model, run_name, test_dataloader):
+
+    for batch in tqdm(test_dataloader):
+        y = model(**get_input_to_model(batch))
+
+        # if isinstance(pred_batch, tuple):
+        #     residuals = pred_batch[1]
+        #     pred_batch = pred_batch[0]
+
+        for i in range(len(batch)):
+            data = batch[i]
+            assert batch.ptr.shape[0]==2, "Can only print if batch is one"
+            plot_gt_pred_label_comparison(data, y, conf, run_name=os.path.basename(run_name))

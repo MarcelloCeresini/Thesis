@@ -87,17 +87,17 @@ if __name__ == "__main__":
     graph_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, "*.pt")))
     
     for path_m, path_g in tqdm(zip(meshComplete_paths, graph_paths), total=len(meshComplete_paths)):
-        # assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
-        # with open(path_m, "rb") as f:
-        #     meshCI = pickle.load(f)
+        assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
+        with open(path_m, "rb") as f:
+            meshCI = pickle.load(f)
 
         data = torch.load(path_g)
-        tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
-        data.sampling_weights = torch.stack(
-            [get_maximum_difference(data.y[faces_in_cells]) for faces_in_cells in tmp])
-        # data.len_faces = torch.tensor([len(f) for f in tmp])
-        # data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2])
-        # data2 = convert_mesh_complete_info_obj_to_graph(conf, meshCI)
+        # tmp = meshCI.face_center_labels
+        # remaining_columns = sorted(set(conf.features_to_keep).difference(conf.labels_to_keep_for_training))
+        # data.y_additional = torch.tensor(tmp[remaining_columns].values, dtype=torch.float32)
+        data.force_on_component = get_forces(conf, data, data.y[:,2], 
+            velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
+        
         torch.save(data, path_g)
 
     print("REMEMBER TO COPY IT TO THE PC FOLDER")

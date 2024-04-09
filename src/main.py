@@ -1,6 +1,6 @@
-import os
+import pickle, sys, os
 from datetime import datetime
-import pickle
+from typing import Literal
 
 import torch
 import torch.nn.functional as F
@@ -16,7 +16,7 @@ from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders
 from train import train, test
 from utils import plot_gt_pred_label_comparison, print_memory_state_gpu, \
-    get_input_to_model, init_wandb
+    get_input_to_model, init_wandb, plot_test_images_from_model
 from models.models import get_model_instance
 
 def print_w_time(str):
@@ -25,7 +25,19 @@ def print_w_time(str):
 
 if __name__ == "__main__":
 
-        init_wandb(Config(), overwrite_WANDB_MODE="offline")
+        WANDB_MODE: Literal["online", "offline"] = "online"
+
+        gettrace = getattr(sys, 'gettrace', None)
+        if gettrace is not None:
+            if gettrace():
+                print('Hmm, Big Debugger is watching me --> setting wandb to offline')
+                WANDB_MODE="offline"
+
+        platform = sys.platform
+        if platform == "linux" or platform == "linux2":
+            WANDB_MODE="offline"
+
+        init_wandb(Config(), overwrite_WANDB_MODE=WANDB_MODE)
         torch.cuda.empty_cache()
         torch.autograd.set_detect_anomaly(True, True)
 
@@ -43,7 +55,7 @@ if __name__ == "__main__":
         wandb.define_metric("metric", summary="min")
 
         print_w_time("GETTING DATALOADERS")
-        train_dataloader, val_dataloader, test_dataloader = \
+        train_dataloader, val_dataloader, test_dataloader, dataloader_train_for_metrics = \
             get_data_loaders(conf)
 
         print_w_time("BUILDING MODEL")
@@ -60,7 +72,7 @@ if __name__ == "__main__":
         print(model_summary)
 
         print_w_time("TRAINING")
-        model = train(model, train_dataloader, val_dataloader, conf, run_name)
+        model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name)
 
         print_w_time("SAVING MODEL")
         if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_runs")):
@@ -81,6 +93,7 @@ if __name__ == "__main__":
 
             wandb.log(metric_results)
 
+            plot_test_images_from_model(conf, model, run_name, test_dataloader)
             # for batch in tqdm(test_dataloader):
             #     pred_batch = model(**get_input_to_model(batch))
 

@@ -31,23 +31,32 @@ class CfdDataset(InMemoryDataset):
 
 
 def get_data_loaders(conf):
-    transform_list = []
-    if not conf["bool_radial_attributes"]:
-        transform_list.append(RemoveRadialAttributes(conf))
+
+    transform_list_train = []
+    transform_list_test = []
+    general_transforms = []
+    
     if conf["flag_BC_PINN"]:
-        transform_list.append(SampleBoundaryPoints(conf))
+        transform_list_train.append(SampleBoundaryPoints(conf))
+        transform_list_test.append(SampleBoundaryPoints(conf, test=True))
     if conf["PINN_mode"] != "supervised_only" or conf["domain_sampling"]["add_edges"]:
-        transform_list.append(SampleDomainPoints(conf))
+        transform_list_train.append(SampleDomainPoints(conf))
+        transform_list_test.append(SampleDomainPoints(conf, test=True))
+
+    if not conf["bool_radial_attributes"]:
+        general_transforms.append(RemoveRadialAttributes(conf))
     if not conf["output_turbulence"]:
-        transform_list.append(RemoveTurbulentLabels(conf))
+        general_transforms.append(RemoveTurbulentLabels(conf))
 
-    transform_list.append(NormalizeLabels(conf))
+    general_transforms.append(NormalizeLabels(conf))
 
-    transforms = pyg_t.Compose(transform_list)
+    transforms_train = pyg_t.Compose(transform_list_train+general_transforms)
+    transforms_test = pyg_t.Compose(transform_list_test+general_transforms)
 
-    dataset_train = CfdDataset(np.array(conf["split_idxs"]["train"]), root=conf["standard_dataset_dir"], transform=transforms)
-    dataset_val = CfdDataset(np.array(conf["split_idxs"]["val"]), root=conf["standard_dataset_dir"], transform=transforms)
-    dataset_test = CfdDataset(np.array(conf["split_idxs"]["test"]), root=conf["standard_dataset_dir"], transform=transforms)
+    dataset_train = CfdDataset(np.array(conf["split_idxs"]["train"]), root=conf["standard_dataset_dir"], transform=transforms_train)
+    dataset_val = CfdDataset(np.array(conf["split_idxs"]["val"]), root=conf["standard_dataset_dir"], transform=transforms_test)
+    dataset_test = CfdDataset(np.array(conf["split_idxs"]["test"]), root=conf["standard_dataset_dir"], transform=transforms_test)
+    dataset_train_for_metrics = CfdDataset(np.array(conf["split_idxs"]["train"]), root=conf["standard_dataset_dir"], transform=transforms_test)
 
     n_workers_train=conf["hyper_params"]["training"]["n_workers_dataloaders"]
     train_dataloader = DataLoader(dataset_train, 
@@ -57,9 +66,8 @@ def get_data_loaders(conf):
                             persistent_workers=n_workers_train>0,
                             pin_memory=True
                             )
-    val_dataloader  = DataLoader(dataset_val,
-                            batch_size=1)
-    test_dataloader = DataLoader(dataset_test, 
-                            batch_size=1)
+    val_dataloader  = DataLoader(dataset_val, batch_size=1)
+    test_dataloader = DataLoader(dataset_test, batch_size=1)
+    train_dataloader_for_metrics = DataLoader(dataset_train_for_metrics, batch_size=1)
 
-    return train_dataloader, val_dataloader, test_dataloader
+    return train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics

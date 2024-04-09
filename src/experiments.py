@@ -60,20 +60,6 @@ def get_last_training(conf, from_checkpoints: bool =False):
     return model, model_conf, run_name
 
 
-def plot_test_images_from_last_run(conf, model, run_name, test_dataloader):
-
-    for batch in tqdm(test_dataloader):
-        pred_batch = model(**get_input_to_model(batch))
-
-        if isinstance(pred_batch, tuple):
-            residuals = pred_batch[1]
-            pred_batch = pred_batch[0]
-
-        for i in range(len(batch)):
-            data = batch[i]
-            pred = pred_batch[batch.ptr[i]:batch.ptr[i+1], :]
-            plot_gt_pred_label_comparison(data, pred.detach().numpy(), conf, run_name=os.path.basename(run_name))
-
 
 def get_run_from_id(run_id):
     wandb.init(id=run_id, resume="must")
@@ -107,49 +93,52 @@ def add_test_results_from_last_checkpoint(conf, test_dataloader):
         metric_results.update({"test_loss":test_loss})
         wandb.log(metric_results)
 
-        plot_test_images_from_last_run(conf, model, run_name, test_dataloader)
+        utils.plot_test_images_from_model(conf, model, run_name, test_dataloader)
 
 
 if __name__ == "__main__":
-    get_run_from_id("2awfxt5j")
-    # conf = Config()
-    # utils.init_wandb(Config(), overwrite_WANDB_MODE="offline")
-    # conf = wandb.config
-    # print("Getting dataloaders")
-    # train_dataloader, val_dataloader, test_dataloader = get_data_loaders(conf)
-    # print("done")
+    
+    # get_run_from_id("2awfxt5j")
+
+    utils.init_wandb(Config(), overwrite_WANDB_MODE="offline")
+    conf = wandb.config
+    run_name = wandb.run.dir.split(os.sep)[-2]
+    print("Getting dataloaders")
+    train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics = get_data_loaders(conf)
+    print("done")
 
     # model, model_conf, run_name = get_last_training(conf)
     ####### print results of last training
-    # plot_test_images_from_last_run(conf, test_dataloader)
+    # plot_test_images_from_model(conf, test_dataloader)
     # model, model_conf, run_name = get_last_training(conf, from_checkpoints=False)
-    # plot_test_images_from_last_run(conf, model, run_name, test_dataloader)
+    # plot_test_images_from_model(conf, model, run_name, test_dataloader)
 
 
     # ######## try if the model works
-    model_conf = conf.get_logging_info()
-    model = get_model_instance(model_conf) # build model
+    # model = get_model_instance(conf) # build model
 
-    conf.device = "cpu"
+    # conf.device = "cpu"
 
-    model.to(conf.device)
+    # model.to(conf.device)
 
-    opt = Adam(
-        params = model.parameters(),
-        lr = conf.hyper_params["training"]["lr"],
-        weight_decay = conf.hyper_params["training"]["weight_decay"],
-    )
-    opt.zero_grad(set_to_none=True)
+    # plot_test_images_from_model(conf, model, run_name, test_dataloader)
 
-    for batch in train_dataloader:
-        batch.to(conf.device)
+    # opt = Adam(
+    #     params = model.parameters(),
+    #     lr = conf.hyper_params["training"]["lr"],
+    #     weight_decay = conf.hyper_params["training"]["weight_decay"],
+    # )
+    # opt.zero_grad(set_to_none=True)
+
+    for batch in train_dataloader_for_metrics:
+        batch.to(conf.device, non_blocking=True)
     # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
-        y = model(**get_input_to_model(batch))
-        # plt.show()
-        loss = model.loss(y, batch.y, batch)
-        loss[0].backward()
-        torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=10, foreach=True)
-        opt.step()
-        break
-    model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
-    print(model_summary)
+        # y = model(**get_input_to_model(batch))
+    #     # plt.show()
+    #     loss = model.loss(y, batch.y, batch)
+    #     loss[0].backward()
+    #     torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=10, foreach=True)
+    #     opt.step()
+    #     break
+    # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
+    # print(model_summary)

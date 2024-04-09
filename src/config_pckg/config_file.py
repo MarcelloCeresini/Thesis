@@ -26,7 +26,7 @@ class Config():
         self.WANDB_FLAG = True
 
         self.DATA_DIR = os.path.join(self.ROOT_DIR, "data")
-        self.device: Literal["cpu", "cuda"] = "cpu"
+        self.device: Literal["cpu", "cuda"] = "cuda"
 
         ##### external folders
         self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
@@ -162,8 +162,16 @@ class Config():
             "cell_face": 3,
         }
 
+        # physical constants
         self.air_speed = 50 # m/s
-        self.relative_atmosferic_pressure = 0
+        self.relative_atmosferic_pressure = 0 # Pa
+        self.air_dynamic_viscosity = 1.45e-5 # kg/(m*s)
+        self.air_density = 1 # kg/m^3
+        self.air_kinematic_viscosity = self.air_dynamic_viscosity / self.air_density # m^2/s
+        self.L = 1 # m
+        self.Re = self.air_speed*self.L/self.air_kinematic_viscosity # adimensional
+        self.standard_normalized_Re = self.L/self.air_kinematic_viscosity # air_speed=1
+
         self.n_theta_bins = 32
         self.quantile_values = 5
         self.distance_quantiles_angular_bin = np.linspace(0,1,self.quantile_values)
@@ -179,6 +187,7 @@ class Config():
             "p": 5,                 # pressure on the face
             "dv_dn": 6,             # ...
             "dp_dn": 7,             # ...
+            # "tangent_versor_angle": 8,
             # "dv_dt": 8,             # derivative along the tangent versor of v
             # "dp_dt": 9,             # ...
         }
@@ -199,12 +208,17 @@ class Config():
             "is_car": 1,
             "is_flap": 2,
             "is_tyre": 3,
+            "ground": 4,
+            "tyre": 5,
+            "main_flap": 6,
+            "second_flap": 7,
+            "p_outlet": 8,
+            "simmetry": 9,
+            "v_inlet": 10,
         }
 
-        self.graph_edge_attr_list = [
-            "x_dist", "y_dist", "norm"
-        ]
-
+        # self.graph_edge_attr_list = ["x_dist", "y_dist", "norm"]
+        self.graph_edge_attr_list = ["x_dist", "y_dist"]
         self.edge_feature_dim = len(self.graph_edge_attr_list)
 
         self.flag_directional_BC_velocity = True
@@ -224,6 +238,8 @@ class Config():
             "turb-diss-rate": {"main": "max-normalization",},
             "turb-kinetic-energy": {"main": "max-normalization"},
         }
+
+        self.w_min_for_clamp = 1e-6
 
         # TODO: compute and fill these values (maybe in a file?)
         with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "dataset_label_stats.pkl"), "rb") as f:
@@ -296,7 +312,7 @@ class Config():
                                     "percentage": 0.5}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
-                "percentage_of_boundary"
+                "all_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
                                     "percentage": 3,
                                     "shift_on_face":True}
@@ -319,6 +335,8 @@ class Config():
         self.main_loss_component_dynamic = "supervised"
         self.lambda_dynamic_weights = 0.1 # NSFnets arXiv:2003.06496v1
         self.gamma_loss = 10
+
+        self.gradient_clip_value = 1
 
         self.logging = {
             "model_log_mode": "all",
