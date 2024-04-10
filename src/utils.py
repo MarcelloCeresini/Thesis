@@ -1,5 +1,6 @@
 import os
 import pickle
+import sys
 from typing import Literal, Optional, Union
 import itertools
 
@@ -591,8 +592,8 @@ def get_forces(
     pressure_forces_tyre = torch.sum((data.inward_normal_areas[tyre_faces]*
                                 pressure_values[tyre_faces].view(-1,1).repeat(1,2)), dim=0)
     
-    shear_stress_flap = torch.tensor((0.,0.))
-    shear_stress_tyre = torch.tensor((0.,0.))
+    shear_stress_flap = torch.tensor((0.,0.), device=pressure_forces_flap.device)
+    shear_stress_tyre = torch.tensor((0.,0.), device=pressure_forces_flap.device)
     if velocity_derivatives is not None:
         assert turbulent_values is not None, "Cannot compute forces without turbulent values"
 
@@ -1695,3 +1696,15 @@ def plot_test_images_from_model(conf, model, run_name, test_dataloader):
             data = batch[i]
             assert batch.ptr.shape[0]==2, "Can only print if batch is one"
             plot_gt_pred_label_comparison(data, y, conf, run_name=os.path.basename(run_name))
+
+            gettrace = getattr(sys, 'gettrace', None)
+            if gettrace is not None:
+                if gettrace():
+                    print('Hmm, Big Debugger is watching me --> breaking in TEST')
+                    break
+        
+        gettrace = getattr(sys, 'gettrace', None)
+        if gettrace is not None:
+            if gettrace():
+                print('Hmm, Big Debugger is watching me --> breaking in TEST')
+                break

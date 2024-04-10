@@ -504,7 +504,7 @@ class PINN(nn.Module):
         self.domain_sampling = self.conf["domain_sampling"]
         self.boundary_sampling = self.conf["boundary_sampling"]
 
-        self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
+        # self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
 
 
     def get_BC_residuals_single_sample(self, x, x_mask, u, v, p, u_x, v_y, p_x, p_y):
@@ -609,9 +609,10 @@ class PINN(nn.Module):
             batch_domain_nodes = torch.cat([torch.full((1, num_domain_sampling_points[i]), i).view(-1) 
                 for i in torch.arange(num_domain_sampling_points.shape[0])])
         else:
-            domain_sampling_points = torch.autograd.Variable(torch.FloatTensor(device=x.device))
+            domain_sampling_points = torch.autograd.Variable(torch.FloatTensor().to(x.device)) # legacy constructor expects device type: cpu
             n_domain_points = 0
-            batch_domain_nodes = torch.IntTensor(device=x.device)
+            batch_domain_nodes = torch.IntTensor()
+            new_edges = torch.IntTensor().view(-1,1).repeat(1,3).to(x.device)
 
         if kwargs.get("boundary_sampling_points", None) is not None:
             idxs_boundary_sampled = kwargs["index_boundary_sampled"].view(-1)
@@ -623,21 +624,12 @@ class PINN(nn.Module):
                 for i in torch.arange(num_boundary_sampling_points.shape[0])])
             # additional_boundary = kwargs["x_additional_boundary"]
         else:
-            boundary_sampling_points = torch.autograd.Variable(torch.FloatTensor(device=x.device))
+            boundary_sampling_points = torch.autograd.Variable(torch.FloatTensor().to(x.device)) # legacy constructor expects device type: cpu
             n_boundary_points = 0
-            batch_boundary_nodes = torch.IntTensor(device=x.device)
+            batch_boundary_nodes = torch.IntTensor()
+            idxs_boundary_sampled = torch.IntTensor().to(x.device)
 
         sampling_points = torch.concatenate((domain_sampling_points, boundary_sampling_points))
-        batch_sampling_points = torch.concatenate((batch_domain_nodes, batch_boundary_nodes)).to(x.device)
-
-        new_edges = torch.cat((
-            new_edges,
-            idxs_boundary_sampled.view(-1,1).repeat(1,3)))
-        domain_slice = torch.arange(n_domain_points)
-        boundary_slice = torch.arange(start=n_domain_points, end=n_domain_points+n_boundary_points)
-        
-        model_params = ({k: v for k, v in self.net.named_parameters()}, 
-                        {k: v for k, v in self.net.named_buffers()},)
 
         # import matplotlib.pyplot as plt
         # a = domain_sampling_points.detach().numpy()
@@ -767,48 +759,61 @@ class PINN(nn.Module):
                 )
                 return {"BC_"+k: v for k,v in residuals.items()}, (u_x, u_y, v_x, v_y)
             else:
-                return {}
+                return {}, ()
 
-        # if sampling_points.shape[0]!=0:
-        assert sampling_points.shape[0]!=0, "No sense in using PINN if no sampling is done, use another model"
 
-        ####################################################################################
-        residuals = {}
-        hess_samp, grads_samp, out_samp, out_sup = vmap(
-            compute_second_derivative, out_dims=(0,0,0,None), randomness="different")(
-                sampling_points, new_edges, batch_sampling_points
-        )
-        #####################################################################################
+        batch_sampling_points = torch.concatenate((batch_domain_nodes, batch_boundary_nodes)).to(x.device)
+
+        new_edges = torch.cat((
+            new_edges,
+            idxs_boundary_sampled.view(-1,1).repeat(1,3)))
+
+        domain_slice = torch.arange(n_domain_points)
+        boundary_slice = torch.arange(start=n_domain_points, end=n_domain_points+n_boundary_points)
         
-        # if (tmp := torch.isnan(hess_samp).sum()) > 0:
-        #     print(f"hess_samp - {tmp} NaNs")
-        if (tmp := torch.isnan(grads_samp).sum()) > 0:
-            print(f"grads_samp - {tmp} NaNs")
-        if (tmp := torch.isnan(out_samp).sum()) > 0:
-            print(f"out_samp - {tmp} NaNs")
-        if (tmp := torch.isnan(out_sup).sum()) > 0:
-            print(f"out_sup - {tmp} NaNs")
-
-        residuals.update(get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp))
+        model_params = ({k: v for k, v in self.net.named_parameters()}, 
+                        {k: v for k, v in self.net.named_buffers()},)
         
-        boundary_residuals, velocity_derivatives_at_B = get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp)
-        
-        if boundary_residuals.get("BC_total", None) is not None:
-            residuals.update({"boundary": boundary_residuals.pop("BC_total")})
-            residuals.update({"debug_only_"+k: v for k, v in boundary_residuals.items()})
-        
-        if self.conf["general_sampling"]["add_edges"] and (domain_slice.shape[0] != 0):
-            residuals.update({"output_sampled_domain": out_samp[domain_slice]})
+        if sampling_points.shape[0]!=0:
+        # assert sampling_points.shape[0]!=0, "No sense in using PINN if no sampling is done, use another model"
 
-        return out_sup, residuals, velocity_derivatives_at_B 
+            ####################################################################################
+            residuals = {}
+            hess_samp, grads_samp, out_samp, out_sup = vmap(
+                compute_second_derivative, out_dims=(0,0,0,None), randomness="different")(
+                    sampling_points, new_edges, batch_sampling_points
+            )
+            #####################################################################################
+            
+            # if (tmp := torch.isnan(hess_samp).sum()) > 0:
+            #     print(f"hess_samp - {tmp} NaNs")
+            if (tmp := torch.isnan(grads_samp).sum()) > 0:
+                print(f"grads_samp - {tmp} NaNs")
+            if (tmp := torch.isnan(out_samp).sum()) > 0:
+                print(f"out_samp - {tmp} NaNs")
+            if (tmp := torch.isnan(out_sup).sum()) > 0:
+                print(f"out_sup - {tmp} NaNs")
 
-        # else:
-        #     out_sup = functional_call(
-        #         self.net,
-        #         model_params,
-        #         (x, x_mask, edge_index, edge_attr, pos, batch),
-        #     )
-        #     return out_sup
+            residuals.update(get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp))
+            
+            boundary_residuals, velocity_derivatives_at_B = get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp)
+            
+            if boundary_residuals.get("BC_total", None) is not None:
+                residuals.update({"boundary": boundary_residuals.pop("BC_total")})
+                residuals.update({"debug_only_"+k: v for k, v in boundary_residuals.items()})
+            
+            if self.conf["general_sampling"]["add_edges"] and (domain_slice.shape[0] != 0):
+                residuals.update({"output_sampled_domain": out_samp[domain_slice]})
+
+            return out_sup, residuals, velocity_derivatives_at_B 
+
+        else:
+            out_sup = functional_call(
+                self.net,
+                model_params,
+                (x, x_mask, edge_index, edge_attr, pos, batch),
+            )
+            return out_sup, {}, ()
 
 
     def loss(self, pred:torch.Tensor, label:torch.Tensor, data: pyg_data.Data):
@@ -919,6 +924,7 @@ class PINN(nn.Module):
 
         optional_values = {}
         sample_residuals = {}
+        x_additional_boundary = getattr(data, "x_additional_boundary", None)
         for i in range(batch_size):
             for k in residuals:
                 # [data.ptr[i]:data.ptr[i+1]]
@@ -926,8 +932,13 @@ class PINN(nn.Module):
                     sample_residuals[k] = residuals[k][ptr_num_sampled[i]:ptr_num_sampled[i+1]]
                 else: # boundary sampling
                     sample_residuals[k] = residuals[k][ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]]
+            
+            if x_additional_boundary is not None:
+                x_additional_boundary_sliced = x_additional_boundary[ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]]
+            else:
+                x_additional_boundary_sliced = None
             sample_loss_dict, sample_optional_values = get_values_per_sample(sample_residuals, 
-                                data.x_additional_boundary[ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]])
+                                x_additional_boundary_sliced)
             
             for k in sample_loss_dict:
                 loss_dict[k] = loss_dict.get(k,0) + sample_loss_dict[k]

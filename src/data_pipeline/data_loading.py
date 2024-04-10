@@ -39,7 +39,7 @@ def get_data_loaders(conf):
     if conf["flag_BC_PINN"]:
         transform_list_train.append(SampleBoundaryPoints(conf))
         transform_list_test.append(SampleBoundaryPoints(conf, test=True))
-    if conf["PINN_mode"] != "supervised_only" or conf["domain_sampling"]["add_edges"]:
+    if conf["PINN_mode"] != "supervised_only":
         transform_list_train.append(SampleDomainPoints(conf))
         transform_list_test.append(SampleDomainPoints(conf, test=True))
 

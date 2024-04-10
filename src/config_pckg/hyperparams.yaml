@@ -6,7 +6,7 @@ training:
   cooldown: 150
   patience_end_training: 360 #same
   min_lr: 0.00001
-  batch_size: 6
+  batch_size: 4
   n_workers_dataloaders: 0
 
 val:

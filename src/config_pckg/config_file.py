@@ -298,11 +298,11 @@ class Config():
         self.bool_bootstrap_bias = True
         self.bootstrap_bias = {k:self.dict_labels_train["mean"][k] for k in self.labels_to_keep_for_training}
         
-        self.PINN_mode: Literal["supervised_only", "continuity_only", "full_laminar", "turbulent_kw", "turbulent_kw_nu_t_derived"] \
-                                = "turbulent_kw"
+        self.PINN_mode: Literal["supervised_only", "supervised_with_sampling", "continuity_only", "full_laminar", "turbulent_kw", "turbulent_kw_nu_t_derived"] \
+            = "turbulent_kw"
         self.flag_BC_PINN: bool = True
-        self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] = \
-            "new_edges"
+        self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] \
+            = "new_edges"
         self.graph_sampling_p_for_interpolation = 0.01
         self.fourier_feat_dim = 64
 
@@ -318,7 +318,8 @@ class Config():
                                     "shift_on_face":True}
 
         self.general_sampling = {"add_edges": True,
-                                    "use_sampling_weights":False}
+                                    "use_sampling_weights":True}
+        
         self.n_sampled_new_edges = 3
 
         self.standard_weights = {
