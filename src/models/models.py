@@ -301,6 +301,8 @@ class EPD_with_sampling(nn.Module):
             if self.model_structure["decoder"].get("act_for_max_norm_feat", False) != False:
                 self.turbolence_activation = eval(self.model_structure["decoder"]["act_for_max_norm_feat"])()
 
+        self.loss_fn = eval(self.conf["hyper_params"]["loss"])
+
 
     def get_fourier_pos_enc(self, x, learnable_matrix) -> torch.Tensor:
         '''https://arxiv.org/pdf/2106.02795.pdf'''
@@ -320,6 +322,7 @@ class EPD_with_sampling(nn.Module):
             sampling_points: Optional[torch.Tensor] = None,
             new_edges: Optional[torch.Tensor] = None,
             new_edge_attributes: Optional[torch.Tensor] = None,
+            batch_sampling_points: Optional[torch.Tensor] = None,
             **kwargs
         ):
         # x, x_mask, edge_index, edge_attr, batch  = data.x, data.x_mask, data.edge_index, data.edge_attr, data.batch
@@ -430,7 +433,6 @@ class EPD_with_sampling(nn.Module):
                     # final_dist = torch.cat((dist, torch.linalg.norm(dist, dim=1, keepdim=True)), dim=1)
 
                     # no update and no skip because there is no info in the sampled node
-                    
                     tmp_x = processed["x"][new_edges]
                     tmp_msg = self.new_edges_msg_mlp(
                         torch.concat((
@@ -440,11 +442,23 @@ class EPD_with_sampling(nn.Module):
                     tmp_msg = tmp_x + tmp_msg
                     aggregated_msg = tmp_msg.mean(dim=0)
                     aggregated_msg = self.new_edges_msg_activation(aggregated_msg)
+
+                    if self.add_global_info_new_edges:
+                        correct_x_graph = X["x_graph"].index_select(0, batch_sampling_points.view(1)).view(-1)
+                    else:
+                        correct_x_graph = torch.FloatTensor(device=x.device)
+
+                    if self.add_global_info_new_edges:
+                        correct_x_BC = X["x_BC"].index_select(0, batch_sampling_points.view(1)).view(-1)
+                    else:
+                        correct_x_BC = torch.FloatTensor(device=x.device)
+                    
+
                     update = self.new_edges_update_mlp(
                         torch.concat((
                             aggregated_msg, 
-                            X["x_BC"].view(-1) if self.add_global_info_new_edges else torch.FloatTensor().to(x.device),
-                            X["x_graph"].view(-1) if self.add_BC_info_new_edges else torch.FloatTensor().to(x.device),
+                            correct_x_BC,
+                            correct_x_graph,
                         )))
                     sampled_points_encoding = aggregated_msg + update
 
@@ -470,8 +484,12 @@ class EPD_with_sampling(nn.Module):
         else:
             return decoded["x"]
 
-    def loss(self, pred:torch.Tensor, label:torch.Tensor):
-        return eval(self.conf["hyper_params"]["loss"])(pred, label)
+    def loss(self, pred:torch.Tensor, label:torch.Tensor, ptr:Optional[torch.Tensor]=None):
+        if ptr is None:
+            return self.loss_fn(pred, label)
+        else:
+            return sum([self.loss_fn(pred[ptr[i]:ptr[i+1]], label[ptr[i]:ptr[i+1]]) 
+                                for i in range( ptr.shape[0]-1)])
 
 
 class PINN(nn.Module):
@@ -571,6 +589,8 @@ class PINN(nn.Module):
             edge_attr: torch.Tensor,
             pos: torch.Tensor,
             batch: torch.Tensor,
+            num_domain_sampling_points: torch.Tensor,
+            num_boundary_sampling_points: torch.Tensor,
             triangulated_cells: Optional[torch.Tensor] = None,
             # triangulation: Delaunay, # TODO: if sampling = "all" precompute triangulation for each sample to ease computation 
             **kwargs
@@ -585,23 +605,31 @@ class PINN(nn.Module):
             domain_sampling_points = torch.autograd.Variable(kwargs["domain_sampling_points"], requires_grad=True)
             n_domain_points = domain_sampling_points.shape[0]
             
-            new_edges = kwargs.get("new_edges", None)
+            new_edges = kwargs.get("new_edges_index", None).T
+            batch_domain_nodes = torch.cat([torch.full((1, num_domain_sampling_points[i]), i).view(-1) 
+                for i in torch.arange(num_domain_sampling_points.shape[0])])
         else:
-            domain_sampling_points = torch.autograd.Variable(torch.FloatTensor().to(x.device))
+            domain_sampling_points = torch.autograd.Variable(torch.FloatTensor(device=x.device))
             n_domain_points = 0
+            batch_domain_nodes = torch.IntTensor(device=x.device)
 
         if kwargs.get("boundary_sampling_points", None) is not None:
-            idxs_boundary_sampled = kwargs["idxs_boundary_sampled"]
+            idxs_boundary_sampled = kwargs["index_boundary_sampled"].view(-1)
             x_BC, x_mask_BC = x[idxs_boundary_sampled], x_mask[idxs_boundary_sampled]
 
             boundary_sampling_points = torch.autograd.Variable(kwargs["boundary_sampling_points"], requires_grad=True)
             n_boundary_points = boundary_sampling_points.shape[0]
-            additional_boundary = kwargs["x_additional_boundary"]
+            batch_boundary_nodes = torch.cat([torch.full((1, num_boundary_sampling_points[i]), i).view(-1) 
+                for i in torch.arange(num_boundary_sampling_points.shape[0])])
+            # additional_boundary = kwargs["x_additional_boundary"]
         else:
-            boundary_sampling_points = torch.autograd.Variable(torch.FloatTensor().to(x.device))
+            boundary_sampling_points = torch.autograd.Variable(torch.FloatTensor(device=x.device))
             n_boundary_points = 0
+            batch_boundary_nodes = torch.IntTensor(device=x.device)
 
         sampling_points = torch.concatenate((domain_sampling_points, boundary_sampling_points))
+        batch_sampling_points = torch.concatenate((batch_domain_nodes, batch_boundary_nodes)).to(x.device)
+
         new_edges = torch.cat((
             new_edges,
             idxs_boundary_sampled.view(-1,1).repeat(1,3)))
@@ -617,19 +645,20 @@ class PINN(nn.Module):
         # plt.scatter(a[:,0], a[:,1], color="b")
         # plt.scatter(b[:,0], b[:,1], color="r")
 
-        def compute_output(sampling_points, new_edges):
+        def compute_output(sampling_points, new_edges, batch_sampling_points):
             # if the distance goes to zero, the grad on the norm goes to NaN (because of the derivative of the sqrt)
             new_edge_attributes = (pos[new_edges, :2]-sampling_points)
 
             out_samp, out_sup = functional_call(
                 self.net,
                 model_params,
-                (x, x_mask, edge_index, edge_attr, pos, batch, sampling_points, new_edges, new_edge_attributes),
+                (x, x_mask, edge_index, edge_attr, pos, batch, 
+                    sampling_points, new_edges, new_edge_attributes, batch_sampling_points),
             )
             return out_samp, (out_samp, out_sup)
 
 
-        def compute_first_derivative(sampling_points, new_edges):
+        def compute_first_derivative(sampling_points, new_edges, batch_sampling_points):
             '''
             https://pytorch.org/tutorials/intermediate/jacobians_hessians.html
             
@@ -638,13 +667,13 @@ class PINN(nn.Module):
             many more outputs than inputs (for example, M>N) then jacfwd is preferred, otherwise use jacrev.
             '''
             grads_samp, (out_samp, out_sup) = \
-                jacrev(compute_output, has_aux=True, argnums=0)(sampling_points, new_edges)
+                jacrev(compute_output, has_aux=True, argnums=0)(sampling_points, new_edges, batch_sampling_points)
             return grads_samp, (grads_samp, out_samp, out_sup)
 
 
-        def compute_second_derivative(sampling_points, new_edges=None):
+        def compute_second_derivative(sampling_points, new_edges=None, batch_sampling_points=None):
             hess_samp, (grads_samp, out_samp, out_sup) = \
-                jacrev(compute_first_derivative, has_aux=True, argnums=0)(sampling_points, new_edges)
+                jacrev(compute_first_derivative, has_aux=True, argnums=0)(sampling_points, new_edges, batch_sampling_points)
             return hess_samp, grads_samp, out_samp, out_sup
         
 
@@ -743,11 +772,13 @@ class PINN(nn.Module):
         # if sampling_points.shape[0]!=0:
         assert sampling_points.shape[0]!=0, "No sense in using PINN if no sampling is done, use another model"
 
+        ####################################################################################
         residuals = {}
         hess_samp, grads_samp, out_samp, out_sup = vmap(
             compute_second_derivative, out_dims=(0,0,0,None), randomness="different")(
-                sampling_points, new_edges, 
+                sampling_points, new_edges, batch_sampling_points
         )
+        #####################################################################################
         
         # if (tmp := torch.isnan(hess_samp).sum()) > 0:
         #     print(f"hess_samp - {tmp} NaNs")
@@ -780,21 +811,32 @@ class PINN(nn.Module):
         #     return out_sup
 
 
-    def loss(self, pred:torch.Tensor, label:torch.Tensor, data: Optional[pyg_data.Data]=None):
+    def loss(self, pred:torch.Tensor, label:torch.Tensor, data: pyg_data.Data):
 
         out_supervised, residuals = pred[0], pred[1]
+        batch_size = data.ptr.shape[0]-1
         assert isinstance(out_supervised, torch.Tensor)
         assert isinstance(residuals, dict)
 
         loss_dict = {}
 
-        if (data is not None) and self.conf["general_sampling"]["add_edges"]:
-            
-            output_sampled_domain = residuals.pop("output_sampled_domain")
+        output_sampled_domain = residuals.pop("output_sampled_domain", None)
+        if output_sampled_domain is not None:
             device = output_sampled_domain.device
 
-            idxs =  data.new_edges_not_shifted[0,:]
-            faces = data.new_edges_not_shifted[1,:]
+            idxs =  data.new_edges_not_shifted.T[0,:] # idxs of sampling points (for each batch between 0 and data.num_domain_sampling_points)
+            num_sampled = data.num_domain_sampling_points
+            ptr_num_sampled = torch.tensor([num_sampled[:i].sum() for i in range(num_sampled.shape[0]+1)])
+            
+            faces = data.new_edges_not_shifted.T[1,:] # idxs of normal points (for each batch between 0 and data.ptr[i])
+            num_new_edges_not_shifted = data.num_new_edges_not_shifted
+            ptr_new_edges_not_shifted = torch.tensor([num_new_edges_not_shifted[:i].sum() for i in range(num_new_edges_not_shifted.shape[0]+1)])
+            
+            for i in range(batch_size):
+                # idxs[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] += data.num ??
+                idxs[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] += ptr_num_sampled[i]
+                faces[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] += data.ptr[i]
+
             n = output_sampled_domain.shape[0]
             assert idxs.max()+1 == n, "Something wrong"
 
@@ -837,39 +879,86 @@ class PINN(nn.Module):
             # y_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, label[faces][:,1], "mean", include_self=False)
             # press = torch.ones(n, device=device).scatter_reduce_(0, idxs, label[faces][:,2], "mean", include_self=False)
             # gt_in_sampled = torch.stack((x_vel, y_vel, press), dim=1)
-            loss_dict.update({"supervised_on_sampled": self.net.loss(output_sampled_domain, gt_in_sampled)})
-        
+            loss_dict.update({"supervised_on_sampled": self.net.loss(output_sampled_domain, gt_in_sampled, ptr_num_sampled)})
         
         ### CAN CHOOSE TO ONLY SUPERVISE IN SAMPLED POINTS (but then you have no supervision on mesh points,
         ###     so it doesn't work very well)
-        loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
+        loss_dict.update({"supervised": self.net.loss(out_supervised, label, ptr=data.ptr)})
         # else:
         #     loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
-        
+
+        def get_values_per_sample(sample_residuals, additional_boundary=None):
+            sample_loss_dict = {}
+            sample_optional_values = {}
+            for k in sample_residuals:
+                if "debug_only_" in k:
+                    with torch.no_grad():
+                        k_to_log = k.removeprefix("debug_only_")
+                        tmp = sample_residuals[k][sample_residuals[k].nonzero()].abs().mean()
+                        sample_optional_values[k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
+                        tmp_dict = {}
+                        for comp in set(self.conf.graph_node_features_not_for_training).difference([
+                                "component_id", "is_car", "is_flap", "is_tyre"]):
+                            correct_idxs = additional_boundary[:,self.conf.graph_node_features_not_for_training[comp]] == 1
+                            tmp = sample_residuals[k][correct_idxs].abs().mean()
+                            
+                            sample_optional_values[comp+"_"+k_to_log] = tmp if not tmp.isnan() \
+                                else torch.tensor(0., device=additional_boundary.device)
+
+                            tmp_dict[k_to_log] = sample_optional_values[comp+"_"+k_to_log]
+                        sample_optional_values[comp+"_total"] = sum(tmp_dict.values())
+                else:
+                    sample_loss_dict[k] = residuals[k].abs().mean()
+            return sample_loss_dict, sample_optional_values
+
+
+        flag_boundary = residuals.get("boundary", None)
+        if flag_boundary is not None:
+            num_sampled_BC = data.num_boundary_sampling_points
+            ptr_num_sampled_BC = torch.tensor([num_sampled_BC[:i].sum() for i in range(num_sampled_BC.shape[0]+1)])
+
         optional_values = {}
-        for k in residuals:
-            if "debug_only_" in k:
-                with torch.no_grad():
-                    k_to_log = k.removeprefix("debug_only_")
-                    tmp = residuals[k][residuals[k].nonzero()].abs().mean()
-                    optional_values[k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
-                    tmp_dict = {}
-                    for comp in set(self.conf.graph_node_features_not_for_training).difference([
-                            "component_id", "is_car", "is_flap", "is_tyre"]):
-                        correct_idxs = data.x_additional_boundary[:,self.conf.graph_node_features_not_for_training[comp]] == 1
-                        tmp = residuals[k][correct_idxs].abs().mean()
+        sample_residuals = {}
+        for i in range(batch_size):
+            for k in residuals:
+                # [data.ptr[i]:data.ptr[i+1]]
+                if k in ["continuity", "momentum_x", "momentum_y"]: # domain sampling
+                    sample_residuals[k] = residuals[k][ptr_num_sampled[i]:ptr_num_sampled[i+1]]
+                else: # boundary sampling
+                    sample_residuals[k] = residuals[k][ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]]
+            sample_loss_dict, sample_optional_values = get_values_per_sample(sample_residuals, 
+                                data.x_additional_boundary[ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]])
+            
+            for k in sample_loss_dict:
+                loss_dict[k] = loss_dict.get(k,0) + sample_loss_dict[k]
+            for k in sample_optional_values:
+                optional_values[k] = optional_values.get(k,0) + sample_optional_values[k]
+
+        loss_dict = {k:v/batch_size for k,v in loss_dict.items()}
+        optional_values = {k:v/batch_size for k,v in optional_values.items()}
+        # for k in residuals:
+        #     if "debug_only_" in k:
+        #         with torch.no_grad():
+        #             k_to_log = k.removeprefix("debug_only_")
+        #             tmp = residuals[k][residuals[k].nonzero()].abs().mean()
+        #             optional_values[k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
+        #             tmp_dict = {}
+        #             for comp in set(self.conf.graph_node_features_not_for_training).difference([
+        #                     "component_id", "is_car", "is_flap", "is_tyre"]):
+        #                 correct_idxs = data.x_additional_boundary[:,self.conf.graph_node_features_not_for_training[comp]] == 1
+        #                 tmp = residuals[k][correct_idxs].abs().mean()
                         
-                        optional_values[comp+"_"+k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
-                        tmp_dict[k_to_log] = optional_values[comp+"_"+k_to_log]
-                    optional_values[comp+"_total"] = sum(tmp_dict.values())
-            else:
-                loss_dict[k] = residuals[k].abs().mean()
+        #                 optional_values[comp+"_"+k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
+        #                 tmp_dict[k_to_log] = optional_values[comp+"_"+k_to_log]
+        #             optional_values[comp+"_total"] = sum(tmp_dict.values())
+        #     else:
+        #         loss_dict[k] = residuals[k].abs().mean()
 
         return sum(loss_dict.values()), loss_dict, optional_values
 
 
 def plot_optional_values(optional_values):
-    tmp = {k:v.detach().numpy() for k,v in optional_values.items()}
+    tmp = {k:v.detach().cpu().numpy() for k,v in optional_values.items()}
     import pandas as pd
     import matplotlib.pyplot as plt
     df = pd.DataFrame([tmp], index=["A"])

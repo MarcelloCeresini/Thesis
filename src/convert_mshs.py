@@ -95,8 +95,7 @@ if __name__ == "__main__":
         # tmp = meshCI.face_center_labels
         # remaining_columns = sorted(set(conf.features_to_keep).difference(conf.labels_to_keep_for_training))
         # data.y_additional = torch.tensor(tmp[remaining_columns].values, dtype=torch.float32)
-        data.force_on_component = get_forces(conf, data, data.y[:,2], 
-            velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
+        data.faces_in_cell = data.faces_in_cell.T
         
         torch.save(data, path_g)
 

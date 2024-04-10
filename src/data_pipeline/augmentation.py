@@ -118,15 +118,15 @@ class SampleDomainPoints(BaseTransform):
                     ### FOR TRAINING
                     idxs_domain_sampled_cells = data.idx_of_triangulated_cell[idxs_domain_sampled_triangs]
 
-                    sampled_padded_faces = data.faces_in_cell[:, idxs_domain_sampled_cells]
+                    sampled_padded_faces = data.faces_in_cell[idxs_domain_sampled_cells, :]
                     mask = sampled_padded_faces != -1
 
                     k_sampled_faces_idxs = torch.multinomial(
-                        mask.to(torch.float32).T, 
+                        mask.to(torch.float32), 
                         num_samples=self.n_sampled_new_edges, 
                         replacement=self.n_sampled_new_edges>3)
 
-                    k_sampled_faces = torch.gather(sampled_padded_faces.T, dim=1, index=k_sampled_faces_idxs)
+                    k_sampled_faces = torch.gather(sampled_padded_faces, dim=1, index=k_sampled_faces_idxs)
 
                     # import matplotlib.pyplot as plt
                     # for i in range(num_samples):
@@ -137,7 +137,7 @@ class SampleDomainPoints(BaseTransform):
                     #     plt.scatter(b[0], b[1], c="y")
                     #     plt.show()
 
-                    data.new_edges = k_sampled_faces
+                    data.new_edges_index = k_sampled_faces.T
                     # data.new_edge_attributes = vmap(lambda x, y: torch.cat((y-x, torch.linalg.norm(y-x, dim=1, keepdim=True)), dim=1))(
                     #     domain_sampling_points, data.pos[k_sampled_faces, :2]
                     # )
@@ -149,11 +149,12 @@ class SampleDomainPoints(BaseTransform):
 
                     # only from existing faces to these new points, not vice-versa
                     # message passing only goes to new places for prediction
-                    sampled_faces = sampled_padded_faces.T[mask.T]
-                    data.new_edges_not_shifted = torch.stack((idxs_tensor, sampled_faces))
+                    sampled_faces = sampled_padded_faces[mask]
+                    data.new_edges_not_shifted = torch.stack((idxs_tensor, sampled_faces)).T
                     new_edges_weights_tmp = vmap(lambda x, y: 1/torch.linalg.norm((y-x).clamp(min=1e-7))**2)(
                         domain_sampling_points[idxs_tensor], data.pos[sampled_faces][:,:2]
                     )
+                    data.num_new_edges_not_shifted = idxs_tensor.shape[0]
 
                     if (tmp := torch.isnan(new_edges_weights_tmp).sum()) > 0:
                         print(f"distance_weighted_label (in augmentation) - {tmp} NaNs")
@@ -173,6 +174,7 @@ class SampleDomainPoints(BaseTransform):
             case _:
                 raise NotImplementedError()
         data.domain_sampling_points = domain_sampling_points
+        data.num_domain_sampling_points = domain_sampling_points.shape[0]
         return data
 
 
@@ -229,6 +231,7 @@ class SampleBoundaryPoints(BaseTransform):
             boundary_sampling_points = data.pos[idxs_boundary_sampled,:2]
         
         data.boundary_sampling_points = boundary_sampling_points
-        data.idxs_boundary_sampled = idxs_boundary_sampled
+        data.num_boundary_sampling_points = boundary_sampling_points.shape[0]
+        data.index_boundary_sampled = idxs_boundary_sampled.view(1,-1)
         data.x_additional_boundary = data.x_additional[idxs_boundary_sampled]
         return data

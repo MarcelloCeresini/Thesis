@@ -66,10 +66,10 @@ if __name__ == "__main__":
         for batch in val_dataloader:
             batch.to(conf["device"])
             break
-        # writer.add_graph(model, input_to_model=input_to_model, use_strict_trace=False)
-        model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
 
-        print(model_summary)
+        ###################################################################################################
+        # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
+        # print(model_summary)
 
         print_w_time("TRAINING")
         model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name)

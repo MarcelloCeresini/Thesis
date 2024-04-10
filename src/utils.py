@@ -1507,10 +1507,12 @@ def get_input_to_model(batch):
         "pos": batch.pos,
         "domain_sampling_points": getattr(batch, "domain_sampling_points", None),
         "boundary_sampling_points": getattr(batch, "boundary_sampling_points", None),
-        "idxs_boundary_sampled": getattr(batch, "idxs_boundary_sampled", None),
-        "new_edges": getattr(batch, "new_edges", None),
+        "index_boundary_sampled": getattr(batch, "index_boundary_sampled", None),
+        "new_edges_index": getattr(batch, "new_edges_index", None),
         "new_edge_attributes": getattr(batch, "new_edge_attributes", None),
         "x_additional_boundary": getattr(batch, "x_additional_boundary", None),
+        "num_domain_sampling_points": getattr(batch, "num_domain_sampling_points", None),
+        "num_boundary_sampling_points": getattr(batch, "num_boundary_sampling_points", None),
     }
 
 
