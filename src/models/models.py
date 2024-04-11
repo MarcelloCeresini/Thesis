@@ -560,25 +560,25 @@ class PINN(nn.Module):
         return residual
 
 
-    def get_stress_tensors(self, k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
-                                            u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True):
-        '''tij = k/w * (dui/dxj + duj/dxi) - (2/3)*k*delta_cronecker(i,j)'''
-        if as_solver:
-            # FIXME: constants, physics
-            w_clamped = torch.clamp(w, min=self.conf.w_min_for_clamp)
-            nu_t = k/w_clamped
-            txx_x = 2*(nu_t*u_xx - k_x/3)
-            txy_y = nu_t*(u_yy+v_xy)
-            tyx_x = nu_t*(v_xx+u_yx)
-            tyy_y = 2*(nu_t*v_yy - k_y/3)
-        else:
-            raise NotImplementedError("Look if this clamp is ok")
-            w_clamped = torch.clamp(w, min=self.conf.w_min_for_clamp)
-            txx_x = 2*((k_x*u_x+k*u_xx)/w_clamped - k*u_x*w_x/w_clamped**2 - k_x/3)
-            txy_y = (k_y*(u_y+v_x) + k*(u_yy+v_xy))/w_clamped - (u_y+v_x)*k*w_y/w_clamped**2
-            tyx_x = (k_x*(v_x+u_y) + k*(v_xx+u_yx))/w_clamped - (v_x+u_y)*k*w_x/w_clamped**2
-            tyy_y = 2*((k_y*v_y+k*v_yy)/w_clamped - k*v_y*w_y/w_clamped**2 - k_y/3)
-        return txx_x, txy_y, tyx_x, tyy_y
+    # def get_stress_tensors(self, k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
+    #                                         u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True):
+    #     '''tij = k/w * (dui/dxj + duj/dxi) - (2/3)*k*delta_cronecker(i,j)'''
+    #     if as_solver:
+    #         # FIXME: constants, physics
+    #         raise NotImplementedError("Look if this clamp is ok")
+    #         w_clamped = torch.clamp(w, min=self.conf.w_min_for_clamp)
+    #         nu_t = k/w_clamped
+    #         txx_x = 2*(nu_t*u_xx - k_x/3)
+    #         txy_y = nu_t*(u_yy+v_xy)
+    #         tyx_x = nu_t*(v_xx+u_yx)
+    #         tyy_y = 2*(nu_t*v_yy - k_y/3)
+    #     else:
+    #         w_clamped = torch.clamp(w, min=self.conf.w_min_for_clamp)
+    #         txx_x = 2*((k_x*u_x+k*u_xx)/w_clamped - k*u_x*w_x/w_clamped**2 - k_x/3)
+    #         txy_y = (k_y*(u_y+v_x) + k*(u_yy+v_xy))/w_clamped - (u_y+v_x)*k*w_y/w_clamped**2
+    #         tyx_x = (k_x*(v_x+u_y) + k*(v_xx+u_yx))/w_clamped - (v_x+u_y)*k*w_x/w_clamped**2
+    #         tyy_y = 2*((k_y*v_y+k*v_yy)/w_clamped - k*v_y*w_y/w_clamped**2 - k_y/3)
+    #     return txx_x, txy_y, tyx_x, tyy_y
 
 
     def forward(self,
@@ -701,21 +701,19 @@ class PINN(nn.Module):
 
             residuals = {}
             match self.conf["PINN_mode"]:
-                case "supervised_only":
+                case "supervised_only" | "supervised_with_sampling":
                     pass
                 case "continuity_only":
                     u_x = denormalize_label(u_x, "x-velocity", self.conf)
                     v_y = denormalize_label(v_y, "y-velocity", self.conf)
-                # FIXME: constants, physics
                     residuals.update({"continuity": (u_x + v_y)})
                 case "full_laminar":
                     u, u_x, u_y, u_xx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yy)), "x-velocity", self.conf)
                     v, v_x, v_y, v_xx, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_yy)), "y-velocity", self.conf)
                     p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
-                # FIXME: constants, physics
                     residuals.update({"continuity": (u_x + v_y),
-                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.conf.Re,
-                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.conf.Re,})
+                                        "momentum_x": u*u_x + v*u_y + p_x/self.conf.air_density - (u_xx + u_yy)*self.conf.air_kinematic_viscosity,
+                                        "momentum_y": u*v_x + v*v_y + p_y/self.conf.air_density - (v_xx + v_yy)*self.conf.air_kinematic_viscosity,})
                 case "turbulent_kw":
                     assert self.conf["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
                     u, u_x, u_y, u_xx, u_yx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yx, u_yy)), "x-velocity", self.conf)
@@ -723,26 +721,20 @@ class PINN(nn.Module):
                     p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
                     k, k_x, k_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((k, k_x, k_y)), "turb-kinetic-energy", self.conf)
                     w, w_x, w_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((w, w_x, w_y)), "turb-diss-rate", self.conf)
-                # FIXME: constants, physics
-                    txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
-                        u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True)
-                # FIXME: constants, physics
-                    residuals.update({"continuity": (u_x + v_y),
-                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.conf.Re + txx_x + txy_y,
-                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.conf.Re + tyx_x + tyy_y,})
-                case "turbulent_kw_nu_t_derived":
-                    raise NotImplementedError("Problems with lift/drag calculus because we don't have derivatives of turbulence su cannot compute nu_t")
-                    assert self.conf["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
-                    u, u_x, u_y, u_xx, u_yx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yx, u_yy)), "x-velocity", self.conf)
-                    v, v_x, v_y, v_xx, v_xy, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_xy, v_yy)), "y-velocity", self.conf)
-                    p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
-                    k, k_x, k_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((k, k_x, k_y)), "turb-kinetic-energy", self.conf)
-                    w, w_x, w_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((w, w_x, w_y)), "turb-diss-rate", self.conf)
-                    txx_x, txy_y, tyx_x, tyy_y = self.get_stress_tensors(k, w, u_x, u_y, v_x, v_y, k_x, k_y, w_x, w_y, \
-                        u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=False)
-                    residuals.update({"continuity": (u_x + v_y),
-                                        "momentum_x": u*u_x + v*u_y + p_x - (u_xx + u_yy)/self.conf.Re + txx_x + txy_y,
-                                        "momentum_y": u*v_x + v*v_y + p_y - (v_xx + v_yy)/self.conf.Re + tyx_x + tyy_y,})
+
+                    # reference for the clipping https://doi.org/10.2514/1.36541
+                    tmp = self.conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/self.conf.beta_star_w)
+                    w = torch.clamp_min(w, tmp)
+                    
+                    residuals.update({
+                        "continuity": (u_x + v_y),
+                        "momentum_x": u*u_x + v*u_y + p_x/self.conf.air_density 
+                                        - (self.conf.air_kinematic_viscosity + k/w)*(u_xx+u_yy) 
+                                        - ((k_x*w-k*w_x)*u_x + (k_y*w-k*w_y)*u_y)/w**2,
+                        "momentum_y": u*v_x + v*v_y + p_y/self.conf.air_density
+                                        - (self.conf.air_kinematic_viscosity + k/w)*(v_xx+v_yy)
+                                        - ((k_x*w-k*w_x)*v_x + (k_y*w-k*w_y)*v_y)/w**2,
+                                    })
                 case _:
                     raise NotImplementedError(f"{self.conf['PINN_mode']} is not implemented yet")
             
@@ -822,6 +814,8 @@ class PINN(nn.Module):
         batch_size = data.ptr.shape[0]-1
         assert isinstance(out_supervised, torch.Tensor)
         assert isinstance(residuals, dict)
+        assert out_supervised.shape[0] == label.shape[0], f"Dimensions do not match: out_supervised.shape[0] = {out_supervised.shape[0]} \
+            != label.shape[0] = {label.shape[0]}"
 
         loss_dict = {}
 

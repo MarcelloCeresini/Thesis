@@ -29,7 +29,7 @@ class RemoveRadialAttributes(BaseTransform):
 
 class RemoveTurbulentLabels(BaseTransform):
     def forward(self, data: torch.Any) -> torch.Any:
-        data.y = data.y[:-2]
+        data.y = data.y[:,:-2]
         return data
 
 class SampleDomainPoints(BaseTransform):

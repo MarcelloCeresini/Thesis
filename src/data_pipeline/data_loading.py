@@ -46,7 +46,7 @@ def get_data_loaders(conf):
     if not conf["bool_radial_attributes"]:
         general_transforms.append(RemoveRadialAttributes(conf))
     if not conf["output_turbulence"]:
-        general_transforms.append(RemoveTurbulentLabels(conf))
+        general_transforms.append(RemoveTurbulentLabels())
 
     general_transforms.append(NormalizeLabels(conf))
 

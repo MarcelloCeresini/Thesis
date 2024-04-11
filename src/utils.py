@@ -592,6 +592,7 @@ def get_forces(
     pressure_forces_tyre = torch.sum((data.inward_normal_areas[tyre_faces]*
                                 pressure_values[tyre_faces].view(-1,1).repeat(1,2)), dim=0)
     
+    # normal is inverted for viscous forces
     shear_stress_flap = torch.tensor((0.,0.), device=pressure_forces_flap.device)
     shear_stress_tyre = torch.tensor((0.,0.), device=pressure_forces_flap.device)
     if velocity_derivatives is not None:
@@ -625,20 +626,16 @@ def get_forces(
                 k, viscosity = k[idxs], viscosity[idxs]
                 n_x, n_y = inward_normal_areas[idxs, 0], inward_normal_areas[idxs, 1]
                 u_x, u_y, v_x, v_y = u_x[idxs_vel], u_y[idxs_vel], v_x[idxs_vel], v_y[idxs_vel]
-                # TODO: do i need to sum normal stress from newton law with reynold's stress?
-                # TODO: STILL NEED TO TAKE THE TANGENT FIRST!
-                x_comp = 2*n_x*u_x + n_y*(u_x+v_y) # x component of stress vector (without turbulence)
-                y_comp = 2*n_y*u_y + n_x*(u_x+v_y) # y component of stress vector (without turbulence)
-                # x_comp = 2*n_x*(u_x-k/3) + n_y*(u_x+v_y) # x component of stress vector
-                # y_comp = 2*n_y*(u_y-k/3) + n_x*(u_x+v_y) # y component of stress vector
+                x_comp =     2*u_x*n_x + (v_x+u_y)*n_y # x component of stress vector (without turbulence)
+                y_comp = (u_y+v_x)*n_x +     2*v_y*n_y # y component of stress vector (without turbulence)
                 return torch.stack((x_comp, y_comp)).T*viscosity
 
         shear_stress_flap = torch.sum(compute_stress_euclidian_components(
-            flap_faces, flap_faces_vel, viscosity, data.inward_normal_areas, u_x, u_y, v_x, v_y, k
+            flap_faces, flap_faces_vel, viscosity, -data.inward_normal_areas, u_x, u_y, v_x, v_y, k
         ), dim=0)
 
         shear_stress_tyre = torch.sum(compute_stress_euclidian_components(
-            tyre_faces, tyre_faces_vel, viscosity, data.inward_normal_areas, u_x, u_y, v_x, v_y, k
+            tyre_faces, tyre_faces_vel, viscosity, -data.inward_normal_areas, u_x, u_y, v_x, v_y, k
         ), dim=0)
     
     pressure_forces = {
@@ -1700,11 +1697,11 @@ def plot_test_images_from_model(conf, model, run_name, test_dataloader):
             gettrace = getattr(sys, 'gettrace', None)
             if gettrace is not None:
                 if gettrace():
-                    print('Hmm, Big Debugger is watching me --> breaking in TEST')
+                    print('Hmm, Big Debugger is watching me --> printing only one')
                     break
         
         gettrace = getattr(sys, 'gettrace', None)
         if gettrace is not None:
             if gettrace():
-                print('Hmm, Big Debugger is watching me --> breaking in TEST')
+                print('Hmm, Big Debugger is watching me --> printing only one')
                 break

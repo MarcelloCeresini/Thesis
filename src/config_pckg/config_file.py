@@ -164,13 +164,17 @@ class Config():
 
         # physical constants
         self.air_speed = 50 # m/s
+        self.T = 288.16 # K
         self.relative_atmosferic_pressure = 0 # Pa
-        self.air_dynamic_viscosity = 1.45e-5 # kg/(m*s)
-        self.air_density = 1 # kg/m^3
+        self.air_dynamic_viscosity = 1.7894e-5 # kg/(m*s)
+        self.air_density = 1.225 # kg/m^3
         self.air_kinematic_viscosity = self.air_dynamic_viscosity / self.air_density # m^2/s
         self.L = 1 # m
         self.Re = self.air_speed*self.L/self.air_kinematic_viscosity # adimensional
         self.standard_normalized_Re = self.L/self.air_kinematic_viscosity # air_speed=1
+
+        self.C_lim_w = 7/8
+        self.beta_star_w = 0.09
 
         self.n_theta_bins = 32
         self.quantile_values = 5
@@ -278,7 +282,14 @@ class Config():
         else:
             self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)
 
+        self.PINN_mode: Literal["supervised_only", "supervised_with_sampling", "continuity_only", "full_laminar", "turbulent_kw"] \
+            = "turbulent_kw"
+        
         self.output_turbulence: bool = True
+        if self.PINN_mode == "turbulent_kw":
+            print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
+            self.output_turbulence = True
+        
         if self.output_turbulence:
             self.labels_to_keep_for_training += self.labels_to_keep_for_training_turbulence
         self.output_dim = len(self.labels_to_keep_for_training)
@@ -294,12 +305,10 @@ class Config():
                 label_name : deepcopy(metric_obj) for label_name in self.labels_to_keep_for_training
             }
             for metric_name, metric_obj in self.metrics.items()}
-
+        
         self.bool_bootstrap_bias = True
         self.bootstrap_bias = {k:self.dict_labels_train["mean"][k] for k in self.labels_to_keep_for_training}
-        
-        self.PINN_mode: Literal["supervised_only", "supervised_with_sampling", "continuity_only", "full_laminar", "turbulent_kw", "turbulent_kw_nu_t_derived"] \
-            = "turbulent_kw"
+
         self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] \
             = "new_edges"
@@ -334,7 +343,7 @@ class Config():
         self.dynamic_loss_weights = False
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"
         self.main_loss_component_dynamic = "supervised"
-        self.lambda_dynamic_weights = 0.1 # NSFnets arXiv:2003.06496v1
+        self.lambda_dynamic_weights = 0.3 # (0.1 in NSFnets arXiv:2003.06496v1)
         self.gamma_loss = 10
 
         self.gradient_clip_value = 1
