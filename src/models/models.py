@@ -706,12 +706,12 @@ class PINN(nn.Module):
                 case "continuity_only":
                     u_x = denormalize_label(u_x, "x-velocity", self.conf)
                     v_y = denormalize_label(v_y, "y-velocity", self.conf)
-                    residuals.update({"continuity": (u_x + v_y)})
+                    residuals.update({"continuity": (u_x + v_y)*self.conf.air_density})
                 case "full_laminar":
                     u, u_x, u_y, u_xx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yy)), "x-velocity", self.conf)
                     v, v_x, v_y, v_xx, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_yy)), "y-velocity", self.conf)
                     p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
-                    residuals.update({"continuity": (u_x + v_y),
+                    residuals.update({"continuity": (u_x + v_y)*self.conf.air_density,
                                         "momentum_x": u*u_x + v*u_y + p_x/self.conf.air_density - (u_xx + u_yy)*self.conf.air_kinematic_viscosity,
                                         "momentum_y": u*v_x + v*v_y + p_y/self.conf.air_density - (v_xx + v_yy)*self.conf.air_kinematic_viscosity,})
                 case "turbulent_kw":
@@ -722,18 +722,19 @@ class PINN(nn.Module):
                     k, k_x, k_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((k, k_x, k_y)), "turb-kinetic-energy", self.conf)
                     w, w_x, w_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((w, w_x, w_y)), "turb-diss-rate", self.conf)
 
+                    k = torch.clamp_min(k, 0.)
                     # reference for the clipping https://doi.org/10.2514/1.36541
                     tmp = self.conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/self.conf.beta_star_w)
                     w = torch.clamp_min(w, tmp)
                     
                     residuals.update({
-                        "continuity": (u_x + v_y),
+                        "continuity": (u_x + v_y)*self.conf.air_density,
                         "momentum_x": u*u_x + v*u_y + p_x/self.conf.air_density 
-                                        - (self.conf.air_kinematic_viscosity + k/w)*(u_xx+u_yy) 
-                                        - ((k_x*w-k*w_x)*u_x + (k_y*w-k*w_y)*u_y)/w**2,
+                                        - (self.conf.air_kinematic_viscosity + k/w)*(u_xx + u_yy) 
+                                        - ((k_x*w - k*w_x) * u_x + (k_y*w - k*w_y) * u_y) / w**2,
                         "momentum_y": u*v_x + v*v_y + p_y/self.conf.air_density
-                                        - (self.conf.air_kinematic_viscosity + k/w)*(v_xx+v_yy)
-                                        - ((k_x*w-k*w_x)*v_x + (k_y*w-k*w_y)*v_y)/w**2,
+                                        - (self.conf.air_kinematic_viscosity + k/w)*(v_xx + v_yy)
+                                        - ((k_x*w - k*w_x) * v_x + (k_y*w - k*w_y) * v_y) / w**2,
                                     })
                 case _:
                     raise NotImplementedError(f"{self.conf['PINN_mode']} is not implemented yet")

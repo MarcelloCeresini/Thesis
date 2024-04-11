@@ -608,34 +608,46 @@ def get_forces(
             flap_faces_vel = flap_faces
             tyre_faces_vel = tyre_faces
 
-        if denormalize:
+        if denormalize: # coming from the model prediction
             u_x, u_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u_x, u_y)), "x-velocity", conf)
             v_x, v_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v_x, v_y)), "y-velocity", conf)
             k = denormalize_label(turbulent_values[:,0], "turb-kinetic-energy", conf)
-            w = denormalize_label(turbulent_values[:,1], "turb-kinetic-energy", conf)
-            k, w = torch.clamp(k, min=0), torch.clamp(w, min=conf.w_min_for_clamp)
+            w = denormalize_label(turbulent_values[:,1], "turb-diss-rate", conf)
         else:
             # If there is no need to denormalize, it means it comes from csv --> no need to clamp
             k, w = turbulent_values[:,0], turbulent_values[:,1]
             
-        viscosity = (conf.air_kinematic_viscosity + k/w).view(-1,1).repeat(1,2) # FIXME: constants
 
-        def compute_stress_euclidian_components(idxs, idxs_vel, viscosity, inward_normal_areas, u_x, u_y, v_x, v_y, k):
+        def compute_stress_euclidian_components(idxs, idxs_vel, inward_normal_areas, u_x, u_y, v_x, v_y, k, w):
                 '''(jacU + jacU.T) dot n --> gives a tensor of stresses, we need the x and y component of its tangent part'''
                 # FIXME: constants + physics
-                k, viscosity = k[idxs], viscosity[idxs]
+                k, w = k[idxs], w[idxs]
                 n_x, n_y = inward_normal_areas[idxs, 0], inward_normal_areas[idxs, 1]
                 u_x, u_y, v_x, v_y = u_x[idxs_vel], u_y[idxs_vel], v_x[idxs_vel], v_y[idxs_vel]
-                x_comp =     2*u_x*n_x + (v_x+u_y)*n_y # x component of stress vector (without turbulence)
-                y_comp = (u_y+v_x)*n_x +     2*v_y*n_y # y component of stress vector (without turbulence)
-                return torch.stack((x_comp, y_comp)).T*viscosity
+                
+                if denormalize: # coming from the model prediction
+                    k = torch.clamp_min(k, 0.)
+                    tmp = conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/conf.beta_star_w)
+                    w = torch.clamp_min(w, tmp)
+                else:
+                    assert torch.all(k>0), "Negative k values"
+                    tmp = conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/conf.beta_star_w)
+                    assert torch.all(w>tmp), "w values need to be clipped in csv"
 
+                viscosity = (conf.air_kinematic_viscosity + k/w).view(-1,1).repeat(1,2)
+
+                x_comp =     2*u_x*n_x + (v_x+u_y)*n_y
+                y_comp = (u_y+v_x)*n_x +     2*v_y*n_y
+
+                return 2*viscosity*torch.stack((x_comp, y_comp)).T
+
+        outward_normal_areas = -data.inward_normal_areas
         shear_stress_flap = torch.sum(compute_stress_euclidian_components(
-            flap_faces, flap_faces_vel, viscosity, -data.inward_normal_areas, u_x, u_y, v_x, v_y, k
+            flap_faces, flap_faces_vel, outward_normal_areas, u_x, u_y, v_x, v_y, k, w
         ), dim=0)
 
         shear_stress_tyre = torch.sum(compute_stress_euclidian_components(
-            tyre_faces, tyre_faces_vel, viscosity, -data.inward_normal_areas, u_x, u_y, v_x, v_y, k
+            tyre_faces, tyre_faces_vel, outward_normal_areas, u_x, u_y, v_x, v_y, k, w
         ), dim=0)
     
     pressure_forces = {
