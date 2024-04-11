@@ -632,7 +632,9 @@ def get_forces(
                 else:
                     assert torch.all(k>0), "Negative k values"
                     tmp = conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/conf.beta_star_w)
-                    assert torch.all(w>tmp), "w values need to be clipped in csv"
+                    if not torch.all(tmp_bool := w>tmp):
+                        w = torch.clamp_min(w, tmp)
+                        # print("w values are too small in csv, need to clip them?")
 
                 viscosity = (conf.air_kinematic_viscosity + k/w).view(-1,1).repeat(1,2)
 
