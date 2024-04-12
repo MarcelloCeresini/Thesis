@@ -1,3 +1,4 @@
+import copy
 import os
 import pickle
 import sys
@@ -252,6 +253,7 @@ def recreate_cells(mesh: meshio.Mesh, conf:Config):
         cell = make_cell(tmp)
         cellblocks[conf.cell_type_dict[cell_type]].append(cell) 
         cell_vertices_list.append(cell)
+        # plt.scatter(mesh.points[cell, 0], mesh.points[cell, 1])
 
     for val, count in zip(unique_vals, unique_counts):
         assert len(cellblocks[conf.cell_type_dict[val]]) == count, "Definition of cells in .msh doesn't correspond to reconstructed cells"
@@ -306,7 +308,10 @@ def get_cell_data(mesh: meshio.Mesh, conf: Config):
 
     cell_volumes = np.fromiter(map(shoelace, [mesh.points[v+[v[0]]][:,:2] for v in vertices_in_cells]), dtype=np.float64)
 
-    return cell_mesh.centers, CcCc_edges_bidir, vertices_in_cells, cell_volumes
+    # FIXME: cell_centers have different index from vertices_in_cells and CcCc_edges_bidir
+    cell_centers = np.stack([np.mean(mesh.points[v], axis=0) for v in vertices_in_cells])
+
+    return cell_centers, CcCc_edges_bidir, vertices_in_cells, cell_volumes
 
 
 def get_face_data(face_mesh: meshio.Mesh, vertices_in_cells):
@@ -404,6 +409,7 @@ def convert_msh_to_mesh_complete_info_obj(
         filename_input_msh,
         filename_output_mesh_complete_obj: Optional[str] = None,
         add_distance_from_BC: Optional[bool] = False,
+        compute_radial_attributes: Optional[bool] = True,
         ):
 
     '''Given an ASCII .msh file from ANSA, returns a graph and saves it to memory'''
@@ -416,6 +422,19 @@ def convert_msh_to_mesh_complete_info_obj(
 
     cell_center_positions, CcCc_edges_bidir, vertices_in_cells, cell_volumes = get_cell_data(mesh, conf)
     
+    # CcCc_edges_bidir = torch.tensor(CcCc_edges_bidir)
+    # # plt.scatter(cell_center_positions[:,0], cell_center_positions[:,1])
+    # for cell_center_idx in CcCc_edges_bidir[:,0].unique():
+    #     plt.scatter(cell_center_positions[cell_center_idx,0], cell_center_positions[cell_center_idx,1], c="g")
+    #     connected_center_idxs = CcCc_edges_bidir[CcCc_edges_bidir[:,0]==cell_center_idx,1]
+    #     for connected_cell in connected_center_idxs:
+    #         plt.arrow(
+    #             cell_center_positions[cell_center_idx,0], cell_center_positions[cell_center_idx,1],
+    #             cell_center_positions[connected_cell,0] - cell_center_positions[cell_center_idx,0], 
+    #             cell_center_positions[connected_cell,1] - cell_center_positions[cell_center_idx,1])
+    #     plt.scatter(mesh.points[vertices_in_cells[cell_center_idx]][:,0], mesh.points[vertices_in_cells[cell_center_idx]][:,1], c="y")
+    #     pass
+
     face_center_positions, FcFc_edges, vertices_in_faces, CcFc_edges, face_areas = get_face_data(mesh, vertices_in_cells)
     
     mesh_complete_instance = MeshCompleteInfo(
@@ -431,6 +450,7 @@ def convert_msh_to_mesh_complete_info_obj(
         vertices_in_faces,
         CcFc_edges,
         face_areas,
+        compute_radial_attributes,
     )
 
     if add_distance_from_BC:
@@ -551,62 +571,91 @@ def get_inward_normal_areas(
         face_center_positions,):
     '''Inward = going away from fluid bulk, towards inside of boundary'''
 
-    faces_x_component = faces_x_component[faces_idxs]
-    faces_y_component = faces_y_component[faces_idxs]
+
+
+    # for cell_center_idx in CcFc_edges[:,0].unique():
+    #     respective_face_center_idxs = CcFc_edges[CcFc_edges[:,0]==cell_center_idx,1]
+    #     plt.scatter(face_center_positions[respective_face_center_idxs][:,0], face_center_positions[respective_face_center_idxs][:,1], c="b")
+    #     plt.scatter(cell_center_positions[cell_center_idx,0], cell_center_positions[cell_center_idx,1], c="y")
 
     CcFc_edges = torch.tensor(CcFc_edges)
-    normal_to_surface = torch.stack((-faces_y_component, faces_x_component), axis=1)
-    opposite_normal_to_surface = torch.stack((faces_y_component, -faces_x_component), axis=1)
+    CcFc_vectors = torch.zeros((faces_idxs.shape[0], 2))
+    normal_to_surface = torch.zeros_like(CcFc_vectors)
 
-    in_tensor = CcFc_edges[:,1].view((CcFc_edges[:,1].shape[0], 1))
-    vectorized_func = torch.vmap(lambda x: (x == faces_idxs).sum() > 0)
-    CcFc_edges_indexes_of_surface_faces =  vectorized_func(in_tensor)
+    plt.scatter(face_center_positions[faces_idxs,0], face_center_positions[faces_idxs,1])
+    for i, face_idx in enumerate(faces_idxs):
+        normal_to_surface[i,0] = -faces_y_component[face_idx]
+        normal_to_surface[i,1] = faces_x_component[face_idx]
 
-    CcFc_edges_component = CcFc_edges[CcFc_edges_indexes_of_surface_faces]
-    CcFc_vectors = torch.tensor(face_center_positions[CcFc_edges_component[:,1]][:,:2] - 
-                                    cell_center_positions[CcFc_edges_component[:,0]][:,:2])
-
+        corresponding_cell = CcFc_edges[CcFc_edges[:,1]==face_idx,0]
+        CcFc_vectors[i] = torch.tensor(
+            face_center_positions[face_idx,:2] -
+            cell_center_positions[corresponding_cell,:2])
+        
+        # plt.arrow(
+        #     cell_center_positions[corresponding_cell, 0], cell_center_positions[corresponding_cell, 1],
+        #     CcFc_vectors[i,0], CcFc_vectors[i,1], color="b"
+        # )
+        # plt.arrow(
+        #     face_center_positions[face_idx, 0], face_center_positions[face_idx, 1],
+        #     normal_to_surface[i,0]/100, normal_to_surface[i,1]/100, color="y"
+        # )
+    
     inward_normals = torch.where(
         ((normal_to_surface*CcFc_vectors).sum(dim=1) > 0).view(-1,1).repeat(1,2), 
-            normal_to_surface, opposite_normal_to_surface)
+            normal_to_surface, -normal_to_surface)
+
+    # for i, face_idx in enumerate(faces_idxs):
+    #     plt.arrow(
+    #         face_center_positions[face_idx, 0], face_center_positions[face_idx, 1],
+    #         inward_normals[i,0]/100, inward_normals[i,1]/100
+    #     )
 
     return inward_normals*face_areas[faces_idxs].view(-1,1).repeat(1,2)
 
 
-def get_forces(
+def get_coefficients_for_component(
         conf:Config, 
-        data:Data, 
+        data:Data,
+        slice_str:str,
         pressure_values, 
-        velocity_derivatives=None, 
-        turbulent_values=None,
-        denormalize=False,
-        from_boundary_sampling=False):
+        velocity_derivatives, 
+        turbulent_values,
+        denormalize,
+        from_boundary_sampling):
     
-    flap_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_flap"]].nonzero()[:,0]
-    tyre_faces = data.x_additional[:, conf.graph_node_features_not_for_training["is_tyre"]].nonzero()[:,0]
+    slice = data.x_additional[:, conf.graph_node_features_not_for_training[slice_str]].nonzero()[:,0]
 
+    if slice.shape[0] == 0:
+        return torch.tensor((0., 0.), device=slice.device), torch.tensor((0., 0.), device=slice.device)
+    
+    pressure_values = pressure_values[slice]
+    inward_normal_areas = data.inward_normal_areas[slice]
+
+    # plt.scatter(data.pos[slice,0], data.pos[slice,1])
+    # for i, idx in enumerate(slice):
+    #     plt.arrow(data.pos[idx,0], data.pos[idx,1], 
+    #             inward_normal_areas[i,0], inward_normal_areas[i,1])
+
+    # pressure_values = copy.copy(pressure_values) + conf.atm
     if denormalize:
         pressure_values = denormalize_label(pressure_values, "pressure", conf)
-    pressure_forces_flap = torch.sum((data.inward_normal_areas[flap_faces]*
-                                pressure_values[flap_faces].view(-1,1).repeat(1,2)), dim=0)
-    pressure_forces_tyre = torch.sum((data.inward_normal_areas[tyre_faces]*
-                                pressure_values[tyre_faces].view(-1,1).repeat(1,2)), dim=0)
+
+    pressure_forces_per_face = inward_normal_areas*pressure_values.view(-1,1).repeat(1,2)
+    pressure_forces = torch.sum(pressure_forces_per_face, dim=0)
     
     # normal is inverted for viscous forces
-    shear_stress_flap = torch.tensor((0.,0.), device=pressure_forces_flap.device)
-    shear_stress_tyre = torch.tensor((0.,0.), device=pressure_forces_flap.device)
+    shear_forces = torch.tensor((0.,0.), device=pressure_forces.device)
     if velocity_derivatives is not None:
         assert turbulent_values is not None, "Cannot compute forces without turbulent values"
 
         if from_boundary_sampling:
             idxs_is_BC = (data.x_mask[:,-1] == 1)
-            flap_faces_vel = data.x_additional[idxs_is_BC, conf.graph_node_features_not_for_training["is_flap"]].nonzero()[:,0]
-            tyre_faces_vel = data.x_additional[idxs_is_BC, conf.graph_node_features_not_for_training["is_tyre"]].nonzero()[:,0]
+            slice_vel = data.x_additional[idxs_is_BC, conf.graph_node_features_not_for_training[slice_str]].nonzero()[:,0]
             u_x, u_y, v_x, v_y = velocity_derivatives
         else:
             u_x, u_y, v_x, v_y = velocity_derivatives[:,0], velocity_derivatives[:,1], velocity_derivatives[:,2], velocity_derivatives[:,3]
-            flap_faces_vel = flap_faces
-            tyre_faces_vel = tyre_faces
+            slice_vel = slice
 
         if denormalize: # coming from the model prediction
             u_x, u_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u_x, u_y)), "x-velocity", conf)
@@ -616,53 +665,51 @@ def get_forces(
         else:
             # If there is no need to denormalize, it means it comes from csv --> no need to clamp
             k, w = turbulent_values[:,0], turbulent_values[:,1]
-            
-
-        def compute_stress_euclidian_components(idxs, idxs_vel, inward_normal_areas, u_x, u_y, v_x, v_y, k, w):
-                '''(jacU + jacU.T) dot n --> gives a tensor of stresses, we need the x and y component of its tangent part'''
-                # FIXME: constants + physics
-                k, w = k[idxs], w[idxs]
-                n_x, n_y = inward_normal_areas[idxs, 0], inward_normal_areas[idxs, 1]
-                u_x, u_y, v_x, v_y = u_x[idxs_vel], u_y[idxs_vel], v_x[idxs_vel], v_y[idxs_vel]
-                
-                if denormalize: # coming from the model prediction
-                    k = torch.clamp_min(k, 0.)
-                    tmp = conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/conf.beta_star_w)
-                    w = torch.clamp_min(w, tmp)
-                else:
-                    assert torch.all(k>0), "Negative k values"
-                    tmp = conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/conf.beta_star_w)
-                    if not torch.all(tmp_bool := w>tmp):
-                        w = torch.clamp_min(w, tmp)
-                        # print("w values are too small in csv, need to clip them?")
-
-                viscosity = (conf.air_kinematic_viscosity + k/w).view(-1,1).repeat(1,2)
-
-                x_comp =     2*u_x*n_x + (v_x+u_y)*n_y
-                y_comp = (u_y+v_x)*n_x +     2*v_y*n_y
-
-                return 2*viscosity*torch.stack((x_comp, y_comp)).T
 
         outward_normal_areas = -data.inward_normal_areas
-        shear_stress_flap = torch.sum(compute_stress_euclidian_components(
-            flap_faces, flap_faces_vel, outward_normal_areas, u_x, u_y, v_x, v_y, k, w
-        ), dim=0)
 
-        shear_stress_tyre = torch.sum(compute_stress_euclidian_components(
-            tyre_faces, tyre_faces_vel, outward_normal_areas, u_x, u_y, v_x, v_y, k, w
-        ), dim=0)
-    
-    pressure_forces = {
-        "flap": pressure_forces_flap,
-        "tyre": pressure_forces_tyre,}
-    pressure_forces["car"] = sum(pressure_forces.values())
+        k, w = k[slice], w[slice]
+        n_x, n_y = outward_normal_areas[slice, 0], outward_normal_areas[slice, 1]
+        u_x, u_y, v_x, v_y = u_x[slice_vel], u_y[slice_vel], v_x[slice_vel], v_y[slice_vel]
 
-    shear_stress_forces = {
-        "flap": shear_stress_flap,
-        "tyre": shear_stress_tyre,}
-    shear_stress_forces["car"] = sum(shear_stress_forces.values())
+        tmp = conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/conf.beta_star_w)
+        if denormalize: # coming from the model prediction
+            k = torch.clamp_min(k, 0.)
+            w = torch.clamp_min(w, tmp)
+        else:
+            assert torch.all(k>0), "Negative k values"
+            tmp = conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/conf.beta_star_w)
+            if not torch.all(tmp_bool := w>tmp):
+                # pass
+                w = torch.clamp_min(w, tmp)
+                # print("w values are too small in csv, need to clip them?")
+            
+        x_comp =     2*u_x*n_x + (v_x+u_y)*n_y
+        y_comp = (u_y+v_x)*n_x +     2*v_y*n_y
+
+        viscosity = (conf.air_kinematic_viscosity + k/w).view(-1,1).repeat(1,2)
+
+        shear_forces = torch.sum(2*viscosity*torch.stack((x_comp, y_comp)).T, dim=0)
     
-    return pressure_forces, shear_stress_forces
+    return pressure_forces/conf.dynamic_pressure, shear_forces/conf.dynamic_pressure
+    
+
+def get_coefficients(
+        conf:Config, 
+        data:Data, 
+        pressure_values, 
+        velocity_derivatives=None, 
+        turbulent_values=None,
+        denormalize=False,
+        from_boundary_sampling=False):
+
+    return_dict = {k: get_coefficients_for_component(
+                        conf, data, k, pressure_values, 
+                        velocity_derivatives, turbulent_values,
+                        denormalize, from_boundary_sampling)
+                    for k in conf.car_parts_for_coefficients}   
+
+    return return_dict
 
 
 class MeshCompleteInfo:
@@ -680,6 +727,7 @@ class MeshCompleteInfo:
             vertices_in_faces,
             CcFc_edges,
             face_areas,
+            compute_radial_attributes = True
     ) -> None:
         self.conf: Config = conf
         self.path = path
@@ -704,9 +752,9 @@ class MeshCompleteInfo:
         self.face_center_labels = None
         self.cell_center_labels = None
 
-        self.radial_attributes = self.get_radial_attributes()
-
-        self.face_center_features = np.concatenate((self.face_center_features, self.radial_attributes), axis=1)
+        if compute_radial_attributes:
+            self.radial_attributes = self.get_radial_attributes()
+            self.face_center_features = np.concatenate((self.face_center_features, self.radial_attributes), axis=1)
 
 
     def set_conf(self, conf):
@@ -1608,7 +1656,7 @@ def convert_mesh_complete_info_obj_to_graph(
                 cell_center_positions=meshCI.cell_center_positions,
                 face_center_positions=meshCI.face_center_positions,)
 
-            data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2],
+            data.components_coefficients = get_coefficients(conf, data, pressure_values=data.y[:,2],
                 velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
             data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
             
@@ -1619,7 +1667,7 @@ def convert_mesh_complete_info_obj_to_graph(
             data.faces_in_cell = torch.nn.utils.rnn.pad_sequence(
                 tmp, 
                 padding_value=-1
-            )
+            ).T
             data.len_faces = torch.tensor([len(f) for f in tmp])
 
             sampling_weights = torch.stack(

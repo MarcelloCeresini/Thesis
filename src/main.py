@@ -43,6 +43,11 @@ if __name__ == "__main__":
 
         conf = wandb.config
 
+        print(f"Copy this to download logs --> {wandb.run.entity}/{wandb.run.project}/{wandb.run.id}")
+        print(f"LOCAL DIRECTORY NAME: {wandb.run.dir}")
+        print(f"LOCAL FILE NAME: run-{wandb.run.name}")
+        print("----------------------------------------------------")
+
         run_name = wandb.run.dir.split(os.sep)[-2]
         pardir = os.path.join(conf.DATA_DIR, "model_runs")
         model_save_path = os.path.join(pardir, f"{run_name}.pt")

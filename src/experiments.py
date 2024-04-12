@@ -100,12 +100,20 @@ if __name__ == "__main__":
     
     # get_run_from_id("2awfxt5j")
 
-    utils.init_wandb(Config(), overwrite_WANDB_MODE="offline")
-    conf = wandb.config
-    run_name = wandb.run.dir.split(os.sep)[-2]
-    print("Getting dataloaders")
-    train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics = get_data_loaders(conf)
-    print("done")
+    api = wandb.Api()
+
+    run = api.run("/Thesis/69phokhj")
+
+    for i, row in run.history().iterrows():
+        print(row["_timestamp"], row["accuracy"])
+    
+
+    # utils.init_wandb(Config(), overwrite_WANDB_MODE="offline")
+    # conf = wandb.config
+    # run_name = wandb.run.dir.split(os.sep)[-2]
+    # print("Getting dataloaders")
+    # train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics = get_data_loaders(conf)
+    # print("done")
 
     # model, model_conf, run_name = get_last_training(conf)
     ####### print results of last training

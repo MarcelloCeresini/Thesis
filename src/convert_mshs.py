@@ -1,3 +1,4 @@
+import copy
 import os
 import pickle
 from time import time
@@ -10,7 +11,7 @@ import torch
 from scipy.spatial import Delaunay
 
 from config_pckg.config_file import Config
-from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph, get_forces
+from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph, get_coefficients
 
 
 def convert_all_msh_to_meshComplete(conf: Config, output_dir: str, input_dir: Optional[str] = None, input_filenames: Optional[list[str]] = None):
@@ -64,41 +65,37 @@ def get_maximum_difference(labels_of_faces_in_cell):
 if __name__ == "__main__":
     conf = Config()
 
-    #################### 1 convert_all_msh_to_meshComplete
-    # meshComplete_objs = convert_all_msh_to_meshComplete(
-    #     conf, 
-    #     output_dir=conf.EXTERNAL_FOLDER_MESHCOMPLETE,
-    #     input_dir=conf.EXTERNAL_FOLDER_MSH, 
-    # )
-    
-    #################### 2 convert_all_meshComplete_to_labelled_meshComplete
-    # input_filenames = glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE, "*.pkl"))
-    # for filename in (pbar := tqdm(input_filenames)):
-    #     with open(filename, "rb") as f:
-    #         obj = pickle.load(f)
-    #     name = obj.name.split(".")[0].removesuffix("_ascii")
-    #     pbar.set_description(f"Adding labels to : {name}")
-    #     if name not in conf.problematic_files:
-    #         obj.add_labels(os.path.join(conf.EXTERNAL_FOLDER_CSV, name+"_cell_values_at300.csv"))
-    #         obj.save_to_disk(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, name+".pkl"))
+   
+    #################### convert all
+    input_filepaths = glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MSH, "*.msh"))
+    input_filenames = [p.split(os.sep)[-1].removesuffix("_ascii.msh") for p in input_filepaths]
+    acceptable_input_filenames = sorted(list(set(input_filenames).difference(conf.problematic_files)))
 
-    #################### 3
+    acceptable_input_filepaths = [os.path.join(conf.EXTERNAL_FOLDER_MSH, p+"_ascii.msh") for p in acceptable_input_filenames]
     meshComplete_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, "*.pkl")))
     graph_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, "*.pt")))
     
-    for path_m, path_g in tqdm(zip(meshComplete_paths, graph_paths), total=len(meshComplete_paths)):
+    for path_msh, name, path_m, path_g in tqdm(zip(acceptable_input_filepaths, acceptable_input_filenames, meshComplete_paths, graph_paths), total=len(meshComplete_paths)):
         assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
-        with open(path_m, "rb") as f:
-            meshCI = pickle.load(f)
 
-        data = torch.load(path_g)
-        # tmp = meshCI.face_center_labels
-        # remaining_columns = sorted(set(conf.features_to_keep).difference(conf.labels_to_keep_for_training))
-        # data.y_additional = torch.tensor(tmp[remaining_columns].values, dtype=torch.float32)
+        # meshCI_new = convert_msh_to_mesh_complete_info_obj(conf, path_msh, compute_radial_attributes=False)
+        # meshCI_new.add_labels(os.path.join(conf.EXTERNAL_FOLDER_CSV, name+"_cell_values_at300.csv"))
+        # meshCI_new.save_to_disk(path_m)
+        # with open(path_m, "rb") as f:
+            # meshCI_old = copy.copy(pickle.load(f))
+
+        # meshCI_new.radial_attributes = meshCI_old.radial_attributes
+        # meshCI_new.face_center_features = np.concatenate((meshCI_new.face_center_features, meshCI_new.radial_attributes), axis=1)
+        # meshCI_new.face_center_labels = meshCI_old.face_center_labels
+        
+        # data = convert_mesh_complete_info_obj_to_graph(conf, meshCI_new, filename_output_graph=path_g)
+        
+        data = copy.copy(torch.load(path_g))
+        # print(data)
         # data.faces_in_cell = data.faces_in_cell.T
-        data.force_on_component = get_forces(conf, data, pressure_values=data.y[:,2],
-            velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
-
+        # data.components_coefficients = get_coefficients(conf, data, pressure_values=data.y[:,2],
+        #     velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
+        # pass
         torch.save(data, path_g)
 
     print("REMEMBER TO COPY IT TO THE PC FOLDER")

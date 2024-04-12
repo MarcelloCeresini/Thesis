@@ -166,13 +166,16 @@ class Config():
         self.air_speed = 50 # m/s
         self.T = 288.16 # K
         self.relative_atmosferic_pressure = 0 # Pa
+        self.atm = 101325 # Pa
         self.air_dynamic_viscosity = 1.7894e-5 # kg/(m*s)
         self.air_density = 1.225 # kg/m^3
         self.air_kinematic_viscosity = self.air_dynamic_viscosity / self.air_density # m^2/s
         self.L = 1 # m
+        self.reference_area = 1 
         self.Re = self.air_speed*self.L/self.air_kinematic_viscosity # adimensional
         self.standard_normalized_Re = self.L/self.air_kinematic_viscosity # air_speed=1
-
+        self.dynamic_pressure = (0.5*self.reference_area*self.air_density*self.air_speed**2)
+    
         self.C_lim_w = 7/8
         self.beta_star_w = 0.09
 
@@ -220,6 +223,8 @@ class Config():
             "simmetry": 9,
             "v_inlet": 10,
         }
+
+        self.car_parts_for_coefficients = ["main_flap", "second_flap", "tyre", "is_car"]
 
         # self.graph_edge_attr_list = ["x_dist", "y_dist", "norm"]
         self.graph_edge_attr_list = ["x_dist", "y_dist"]
@@ -286,7 +291,7 @@ class Config():
             = "turbulent_kw"
         
         self.output_turbulence: bool = True
-        if self.PINN_mode == "turbulent_kw":
+        if self.PINN_mode == "turbulent_kw" and not self.output_turbulence:
             print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
             self.output_turbulence = True
         

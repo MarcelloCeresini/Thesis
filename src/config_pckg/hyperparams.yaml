@@ -1,15 +1,15 @@
 training:
   lr: 0.001
   weight_decay: 0.0001
-  n_epochs: 5
-  patience_reduce_lr: 200 # need to be divisible by "n_epochs_val" below
-  cooldown: 150
-  patience_end_training: 360 #same
+  n_epochs: 1000
+  patience_reduce_lr: 150 # need to be divisible by "n_epochs_val" below
+  cooldown: 100
+  patience_end_training: 260 #same
   min_lr: 0.00001
-  batch_size: 4
+  batch_size: 2
   n_workers_dataloaders: 0
 
 val:
-  n_epochs_val: 1
+  n_epochs_val: 10
 
 loss: MSE_loss

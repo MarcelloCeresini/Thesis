@@ -16,7 +16,7 @@ from torch.masked import masked_tensor
 from pandas import json_normalize
 import torchmetrics
 
-from utils import print_memory_state_gpu, get_input_to_model, get_forces
+from utils import print_memory_state_gpu, get_input_to_model, get_coefficients
 from config_pckg.config_file import Config 
 import loss_pckg
 
@@ -61,7 +61,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
     metric_dict = deepcopy(conf["metric_dict"])
     for metric_name in metric_dict:
         metric_dict[metric_name] = {k:eval(v)() for k,v in metric_dict[metric_name].items()}
-    metric_aero = eval(deepcopy(conf["metric_aero"]))()
+    metric_aero = eval(deepcopy(conf["metric_aero"]))(conf)
 
     device = list(model.parameters())[0].device
 
@@ -104,14 +104,14 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                 if conf.flag_BC_PINN and conf.output_turbulence:
                     pred_vel_derivatives = torch.stack(pred[2])
                     pred_turb_values = pred[0][batch.ptr[i]:batch.ptr[i+1], 3:]
-                    pred_forces = get_forces(conf, data, pred_sample_pressure, 
+                    pred_forces = get_coefficients(conf, data, pred_sample_pressure, 
                         velocity_derivatives=pred_vel_derivatives, turbulent_values=pred_turb_values, 
                         denormalize=True, from_boundary_sampling=True)
                 else:
-                    pred_forces = get_forces(conf, data, pred_sample_pressure)
+                    pred_forces = get_coefficients(conf, data, pred_sample_pressure)
                 
                 metric_aero.forward(pred=pred_forces,
-                                    label=data.force_on_component)
+                                    label=data.components_coefficients)
                 
             batch.cpu()
 
