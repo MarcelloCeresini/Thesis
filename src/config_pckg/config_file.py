@@ -350,8 +350,8 @@ class Config():
         self.physical_constraint_loss = True
         if self.physical_constraint_loss:
             self.standard_weights.update({
-                "negative_k": self.standard_weights["momentum_x"],
-                "negative_w": self.standard_weights["momentum_x"],
+                "negative_k": 1,
+                "negative_w": 1,
             })
 
         self.normalize_denormalized_loss_components = True

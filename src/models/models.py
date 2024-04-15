@@ -704,15 +704,17 @@ class PINN(nn.Module):
                                         "momentum_y": u*v_x + v*v_y + p_y/self.conf.air_density - (v_xx + v_yy)*self.conf.air_kinematic_viscosity,})
                 case "turbulent_kw":
                     assert self.conf["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
+                    
+                    # OSS: before denormalization, otherwise the values are crazy
+                    if self.conf.get("physical_constraint_loss", False) and self.conf.PINN_mode == "turbulent_kw":
+                        residuals["negative_k"] = torch.clamp_max(k, 0)
+                        residuals["negative_w"] = torch.clamp_max(w, 0)
+                    
                     u, u_x, u_y, u_xx, u_yx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yx, u_yy)), "x-velocity", self.conf)
                     v, v_x, v_y, v_xx, v_xy, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_xy, v_yy)), "y-velocity", self.conf)
                     p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
                     k, k_x, k_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((k, k_x, k_y)), "turb-kinetic-energy", self.conf)
                     w, w_x, w_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((w, w_x, w_y)), "turb-diss-rate", self.conf)
-
-                    if self.conf.get("physical_constraint_loss", False) and self.conf.PINN_mode == "turbulent_kw":
-                        residuals["negative_k"] = torch.clamp_max(k, 0)
-                        residuals["negative_w"] = torch.clamp_max(w, 0)
 
                     k = torch.clamp_min(k, 0.)
                     # reference for the clipping https://doi.org/10.2514/1.36541
