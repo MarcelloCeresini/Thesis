@@ -23,8 +23,9 @@ def print_w_time(str):
     print(f"{datetime.now().strftime('%m/%d/%Y, %H:%M:%S')} - {str}")
 
 
-if __name__ == "__main__":
-
+def main(config=None):
+    with wandb.init(config=config):
+        
         WANDB_MODE: Literal["online", "offline"] = "online"
 
         gettrace = getattr(sys, 'gettrace', None)
@@ -37,7 +38,8 @@ if __name__ == "__main__":
         if platform == "linux" or platform == "linux2":
             WANDB_MODE="offline"
 
-        init_wandb(Config(), overwrite_WANDB_MODE=WANDB_MODE)
+        conf_tmp = Config(wandb.config)
+        init_wandb(conf_tmp, overwrite_WANDB_MODE=WANDB_MODE)
         torch.cuda.empty_cache()
         torch.autograd.set_detect_anomaly(True, True)
 

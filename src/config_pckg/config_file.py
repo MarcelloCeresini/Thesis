@@ -16,7 +16,7 @@ from loss_pckg import metrics
 
 class Config():
 
-    def __init__(self, mode=None):
+    def __init__(self, wandb_sweep_cong=None):
         '''
         Create a config class. To make it more readable, all fixed hyperparameters can be stored in a YAML file
         To change only some parameters between runs, we use a match case
@@ -61,12 +61,6 @@ class Config():
                 self.model_structure = yaml.safe_load(stream)
             except yaml.YAMLError as exc:
                 print(exc)
-
-        match mode:
-            case None:
-                pass
-            case _:
-                raise NotImplementedError()
 
         self.dim = 2
         self.epsilon_for_point_matching = 1e-4
@@ -247,8 +241,6 @@ class Config():
             "turb-diss-rate": {"main": "max-normalization",},
             "turb-kinetic-energy": {"main": "max-normalization"},
         }
-
-        self.w_min_for_clamp = 1e-6
 
         # TODO: compute and fill these values (maybe in a file?)
         with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "dataset_label_stats.pkl"), "rb") as f:
