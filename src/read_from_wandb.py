@@ -5,6 +5,8 @@ import os
 
 conf = Config()
 
+# https://github.com/wandb/wandb/issues/1768
+
 run_name = "eb5rgzif"
 
 data_path = os.path.join(

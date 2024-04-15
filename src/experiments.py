@@ -100,20 +100,20 @@ if __name__ == "__main__":
     
     # get_run_from_id("2awfxt5j")
 
-    api = wandb.Api()
+    # api = wandb.Api()
 
-    run = api.run("/Thesis/69phokhj")
+    # run = api.run("/Thesis/69phokhj")
 
-    for i, row in run.history().iterrows():
-        print(row["_timestamp"], row["accuracy"])
+    # for i, row in run.history().iterrows():
+    #     print(row["_timestamp"], row["accuracy"])
     
 
-    # utils.init_wandb(Config(), overwrite_WANDB_MODE="offline")
-    # conf = wandb.config
+    utils.init_wandb(Config(), overwrite_WANDB_MODE="offline")
+    conf = wandb.config
     # run_name = wandb.run.dir.split(os.sep)[-2]
-    # print("Getting dataloaders")
-    # train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics = get_data_loaders(conf)
-    # print("done")
+    print("Getting dataloaders")
+    train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics = get_data_loaders(conf)
+    print("done")
 
     # model, model_conf, run_name = get_last_training(conf)
     ####### print results of last training
@@ -123,30 +123,28 @@ if __name__ == "__main__":
 
 
     # ######## try if the model works
-    # model = get_model_instance(conf) # build model
+    model = get_model_instance(conf) # build model
 
     # conf.device = "cpu"
 
-    # model.to(conf.device)
+    model.to(conf.device)
 
     # plot_test_images_from_model(conf, model, run_name, test_dataloader)
 
-    # opt = Adam(
-    #     params = model.parameters(),
-    #     lr = conf.hyper_params["training"]["lr"],
-    #     weight_decay = conf.hyper_params["training"]["weight_decay"],
-    # )
-    # opt.zero_grad(set_to_none=True)
+    opt = Adam(
+        params = model.parameters(),
+        lr = conf.hyper_params["training"]["lr"],
+        weight_decay = conf.hyper_params["training"]["weight_decay"],
+    )
+    opt.zero_grad(set_to_none=True)
 
     for batch in train_dataloader_for_metrics:
         batch.to(conf.device, non_blocking=True)
-    # plt.scatter(batch.pos[:,0], batch.pos[:,1], color="g")
-        # y = model(**get_input_to_model(batch))
-    #     # plt.show()
-    #     loss = model.loss(y, batch.y, batch)
-    #     loss[0].backward()
-    #     torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=10, foreach=True)
-    #     opt.step()
-    #     break
+        y = model(**get_input_to_model(batch))
+        loss = model.loss(y, batch.y, batch)
+        loss[0].backward()
+        torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=10, foreach=True)
+        opt.step()
+        break
     # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None) # run one sample through model
     # print(model_summary)

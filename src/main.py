@@ -114,7 +114,6 @@ if __name__ == "__main__":
             #         # residuals = residuals[batch.ptr[i]:batch.ptr[i+1]]
             #         # plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name, residuals=True)
 
-        # FIXME: doesn't work(?)
         # artifact = wandb.Artifact(name="test_img_results", type="png")
         # artifact.add_dir(local_path=os.path.join(conf.test_imgs_comparisons, run_name))
         # wandb.run.log_artifact(artifact)

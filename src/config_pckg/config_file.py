@@ -323,7 +323,7 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.5}
+                                    "percentage": 0.3}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "all_boundary"
@@ -336,14 +336,24 @@ class Config():
         
         self.n_sampled_new_edges = 3
 
+        self.residual_loss: Literal["MAE", "MSE"] = "MSE"
+
         self.standard_weights = {
             "supervised": 1,
             "supervised_on_sampled": 1,
             "boundary": 10,
-            "continuity": 1000,
-            "momentum_x": 10,
-            "momentum_y": 10,
+            "continuity": 100,
+            "momentum_x": 1,
         }
+        self.standard_weights["momentum_y"] = self.standard_weights["momentum_x"]
+
+        self.physical_constraint_loss = True
+        if self.physical_constraint_loss:
+            self.standard_weights.update({
+                "negative_k": self.standard_weights["momentum_x"],
+                "negative_w": self.standard_weights["momentum_x"],
+            })
+
 
         self.dynamic_loss_weights = False
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"

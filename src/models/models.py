@@ -175,7 +175,6 @@ class EncodeProcessDecode_Baseline(nn.Module):
         x_BC = X["x"][BC_idxs, :]
         batch_BC = X["batch"][BC_idxs]
 
-        # FIXME: check if mean is done sample wise otherwise change it
         # BC is created at the beginning and never updated because it should encode the geometry (fixed during message passing)
         X.update({"x_BC": pyg_utils.scatter(x_BC, batch_BC, dim=0, reduce="mean")}) # batch_size x num_features
         X.update({"x_graph": pyg_nn.pool.global_mean_pool(X["x"], batch)})
@@ -359,7 +358,6 @@ class EPD_with_sampling(nn.Module):
         x_BC = X["x"][BC_idxs, :]
         batch_BC = X["batch"][BC_idxs]
 
-        # FIXME: check if mean is done sample wise otherwise change it
         # BC is created at the beginning and never updated because it should encode the geometry (fixed during message passing)
         X.update({"x_BC": pyg_utils.scatter(x_BC, batch_BC, dim=0, reduce="mean")}) # batch_size x num_features
         X.update({"x_graph": pyg_nn.pool.global_mean_pool(X["x"], batch)})
@@ -377,7 +375,6 @@ class EPD_with_sampling(nn.Module):
 
             match self.conf["inference_mode_latent_sampled_points"]:
                 case "squared_distance":
-                    # FIXME: we NEED knn to be scalable, but with functional_call+vmap it doesn't work
                     # positional_encoding_graph_points = self.positional_encoder(pos)
                     # positional_encoding_sampling_points = self.positional_encoder(sampling_points)
                     
@@ -508,14 +505,6 @@ class PINN(nn.Module):
 
 
     def get_BC_residuals_single_sample(self, x, x_mask, u, v, p, u_x, v_y, p_x, p_y):
-
-        # FIXME: denormalization?
-        # pros: summing residuals of velocity and pressure gives the correctcly weigthed contribute
-        # cons: need to denormalize also the gt_label, not only the prediction
-        u, u_x = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x)), "x-velocity", self.conf)
-        v, v_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_y)), "y-velocity", self.conf)
-        p, p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p, p_x, p_y)), "pressure", self.conf)
-
         feat_dict = self.conf["graph_node_feature_dict"]
         mask_dict = self.conf["graph_node_feature_mask"]
 
@@ -564,7 +553,6 @@ class PINN(nn.Module):
     #                                         u_xx, u_yx, u_yy, v_xx, v_xy, v_yy, as_solver=True):
     #     '''tij = k/w * (dui/dxj + duj/dxi) - (2/3)*k*delta_cronecker(i,j)'''
     #     if as_solver:
-    #         # FIXME: constants, physics
     #         raise NotImplementedError("Look if this clamp is ok")
     #         w_clamped = torch.clamp(w, min=self.conf.w_min_for_clamp)
     #         nu_t = k/w_clamped
@@ -698,7 +686,7 @@ class PINN(nn.Module):
                 u_x, u_y, v_x, v_y, p_x, p_y, k_x, k_y, w_x, w_y, \
                 u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy = get_correct_slice(
                     slice_idxs, hess_samp, grads_samp, out_samp, turbolence=True)
-
+                
             residuals = {}
             match self.conf["PINN_mode"]:
                 case "supervised_only" | "supervised_with_sampling":
@@ -721,6 +709,10 @@ class PINN(nn.Module):
                     p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
                     k, k_x, k_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((k, k_x, k_y)), "turb-kinetic-energy", self.conf)
                     w, w_x, w_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((w, w_x, w_y)), "turb-diss-rate", self.conf)
+
+                    if self.conf.physical_constraint_loss and self.conf.PINN_mode == "turbulent_kw":
+                        residuals["negative_k"] = torch.clamp_max(k, 0)
+                        residuals["negative_w"] = torch.clamp_max(w, 0)
 
                     k = torch.clamp_min(k, 0.)
                     # reference for the clipping https://doi.org/10.2514/1.36541
@@ -853,11 +845,13 @@ class PINN(nn.Module):
                 dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,2], "sum", include_self=False)
 
             if output_sampled_domain.shape[1] > 3:
-                k_turb = torch.ones(n, device=device, 
+                k_turb = torch.ones(n, device=device,
                     dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,3], "sum", include_self=False)
                 w_turb = torch.ones(n, device=device, 
                     dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,4], "sum", include_self=False)
             
+                
+
             normalization_const = torch.zeros(n, device=device).scatter_reduce_(0, idxs, data.new_edges_weights, "sum", include_self=False)
 
             if (tmp := torch.isnan(normalization_const).sum()) > 0:
@@ -888,19 +882,20 @@ class PINN(nn.Module):
         #     loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
 
         def get_values_per_sample(sample_residuals, additional_boundary=None):
+            loss_fn = lambda x: x.abs().mean() if self.conf.residual_loss == "MAE" else x.square().mean()
             sample_loss_dict = {}
             sample_optional_values = {}
             for k in sample_residuals:
                 if "debug_only_" in k:
                     with torch.no_grad():
                         k_to_log = k.removeprefix("debug_only_")
-                        tmp = sample_residuals[k][sample_residuals[k].nonzero()].abs().mean()
+                        tmp = loss_fn(sample_residuals[k][sample_residuals[k].nonzero()])
                         sample_optional_values[k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
                         tmp_dict = {}
                         for comp in set(self.conf.graph_node_features_not_for_training).difference([
                                 "component_id", "is_car", "is_flap", "is_tyre"]):
                             correct_idxs = additional_boundary[:,self.conf.graph_node_features_not_for_training[comp]] == 1
-                            tmp = sample_residuals[k][correct_idxs].abs().mean()
+                            tmp = loss_fn(sample_residuals[k][correct_idxs])
                             
                             sample_optional_values[comp+"_"+k_to_log] = tmp if not tmp.isnan() \
                                 else torch.tensor(0., device=additional_boundary.device)
@@ -908,7 +903,7 @@ class PINN(nn.Module):
                             tmp_dict[k_to_log] = sample_optional_values[comp+"_"+k_to_log]
                         sample_optional_values[comp+"_total"] = sum(tmp_dict.values())
                 else:
-                    sample_loss_dict[k] = residuals[k].abs().mean()
+                    sample_loss_dict[k] = loss_fn(residuals[k])
             return sample_loss_dict, sample_optional_values
 
 
