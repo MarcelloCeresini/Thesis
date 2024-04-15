@@ -675,14 +675,13 @@ def get_coefficients_for_component(
         tmp = conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/conf.beta_star_w)
         if denormalize: # coming from the model prediction
             k = torch.clamp_min(k, 0.)
-            w = torch.clamp_min(w, tmp)
+            w = torch.maximum(w, tmp)
         else:
             assert torch.all(k>0), "Negative k values"
-            tmp = conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/conf.beta_star_w)
             if not torch.all(tmp_bool := w>tmp):
+                # print("w values are too small in csv, need to clip them to compute lift/drag")
                 # pass
-                w = torch.clamp_min(w, tmp)
-                # print("w values are too small in csv, need to clip them?")
+                w = torch.maximum(w, tmp)
             
         x_comp =     2*u_x*n_x + (v_x+u_y)*n_y
         y_comp = (u_y+v_x)*n_x +     2*v_y*n_y

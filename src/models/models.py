@@ -707,8 +707,8 @@ class PINN(nn.Module):
                     
                     # OSS: before denormalization, otherwise the values are crazy
                     if self.conf.get("physical_constraint_loss", False) and self.conf.PINN_mode == "turbulent_kw":
-                        residuals["negative_k"] = torch.clamp_max(k, 0)
-                        residuals["negative_w"] = torch.clamp_max(w, 0)
+                        residuals["negative_k"] = torch.clamp_max(k, 0.)
+                        residuals["negative_w"] = torch.clamp_max(w, 0.)
                     
                     u, u_x, u_y, u_xx, u_yx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yx, u_yy)), "x-velocity", self.conf)
                     v, v_x, v_y, v_xx, v_xy, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_xy, v_yy)), "y-velocity", self.conf)
@@ -719,7 +719,7 @@ class PINN(nn.Module):
                     k = torch.clamp_min(k, 0.)
                     # reference for the clipping https://doi.org/10.2514/1.36541
                     tmp = self.conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/self.conf.beta_star_w)
-                    w = torch.clamp_min(w, tmp)
+                    w = torch.maximum(w, tmp)
                     
                     residuals.update({
                         "continuity": (u_x + v_y)*self.conf.air_density,
@@ -941,12 +941,12 @@ class PINN(nn.Module):
         optional_values = {k:v/batch_size for k,v in optional_values.items()}
 
         if self.conf.get("normalize_denormalized_loss_components", False):
-            supervised_value = loss_dict["supervised"].item()
+            supervised_value_ub = loss_dict["supervised"].item() * 10
 
-            for k in ["continuity", "momentum_x", "momentum_y", "negative_k", "negative_w"]:
+            for k in ["momentum_x", "momentum_y"]:
                 tmp = loss_dict.get(k, None)
-                if tmp is not None and tmp != 0:
-                    loss_dict[k] = tmp * (supervised_value / tmp.item())
+                if tmp is not None and tmp != 0 and tmp > supervised_value_ub:
+                    loss_dict[k] = (supervised_value_ub) * tmp / tmp.item()
         # for k in residuals:
         #     if "debug_only_" in k:
         #         with torch.no_grad():
