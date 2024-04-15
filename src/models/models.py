@@ -710,7 +710,7 @@ class PINN(nn.Module):
                     k, k_x, k_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((k, k_x, k_y)), "turb-kinetic-energy", self.conf)
                     w, w_x, w_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((w, w_x, w_y)), "turb-diss-rate", self.conf)
 
-                    if self.conf.physical_constraint_loss and self.conf.PINN_mode == "turbulent_kw":
+                    if self.conf.get("physical_constraint_loss", False) and self.conf.PINN_mode == "turbulent_kw":
                         residuals["negative_k"] = torch.clamp_max(k, 0)
                         residuals["negative_w"] = torch.clamp_max(w, 0)
 
@@ -937,6 +937,14 @@ class PINN(nn.Module):
 
         loss_dict = {k:v/batch_size for k,v in loss_dict.items()}
         optional_values = {k:v/batch_size for k,v in optional_values.items()}
+
+        if self.conf.get("normalize_denormalized_loss_components", False):
+            supervised_value = loss_dict["supervised"].item()
+
+            for k in ["continuity", "momentum_x", "momentum_y", "negative_k", "negative_w"]:
+                tmp = loss_dict.get(k, None)
+                if tmp is not None and tmp != 0:
+                    loss_dict[k] = tmp * (supervised_value / tmp.item())
         # for k in residuals:
         #     if "debug_only_" in k:
         #         with torch.no_grad():

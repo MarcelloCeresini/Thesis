@@ -26,7 +26,7 @@ class Config():
         self.WANDB_FLAG = True
 
         self.DATA_DIR = os.path.join(self.ROOT_DIR, "data")
-        self.device: Literal["cpu", "cuda"] = "cuda"
+        self.device: Literal["cpu", "cuda"] = "cpu"
 
         ##### external folders
         self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
@@ -354,6 +354,7 @@ class Config():
                 "negative_w": self.standard_weights["momentum_x"],
             })
 
+        self.normalize_denormalized_loss_components = True
 
         self.dynamic_loss_weights = False
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"
