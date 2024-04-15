@@ -43,6 +43,9 @@ if __name__ == "__main__":
 
         conf = wandb.config
 
+        if conf.device == "cpu":
+            ResourceWarning("YOU ARE USING THE CPU")
+
         print(f"Copy this to download logs --> {wandb.run.entity}/{wandb.run.project}/{wandb.run.id}")
         print(f"LOCAL DIRECTORY NAME: {wandb.run.dir}")
         print(f"LOCAL FILE NAME: run-{wandb.run.name}")

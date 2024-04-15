@@ -26,7 +26,7 @@ class Config():
         self.WANDB_FLAG = True
 
         self.DATA_DIR = os.path.join(self.ROOT_DIR, "data")
-        self.device: Literal["cpu", "cuda"] = "cpu"
+        self.device: Literal["cpu", "cuda"] = "cuda"
 
         ##### external folders
         self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
@@ -323,12 +323,12 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.3}
+                                    "percentage": 0.2}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "all_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
-                                    "percentage": 3,
+                                    "percentage": 1.5,
                                     "shift_on_face":True}
 
         self.general_sampling = {"add_edges": True,
@@ -341,9 +341,9 @@ class Config():
         self.standard_weights = {
             "supervised": 1,
             "supervised_on_sampled": 1,
-            "boundary": 10,
-            "continuity": 100,
-            "momentum_x": 1,
+            "boundary": 5,
+            "continuity": 5,
+            "momentum_x": 2,
         }
         self.standard_weights["momentum_y"] = self.standard_weights["momentum_x"]
 

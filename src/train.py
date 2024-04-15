@@ -73,7 +73,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
 
         model.eval()
         for batch in loader:
-            batch.to(device)
+            batch.to(device, non_blocking=True)
             pred = model(**get_input_to_model(batch))
             labels = clean_labels(batch, model.conf)
             loss = model.loss(pred, labels, data=batch)
@@ -276,7 +276,7 @@ def train(
         # torch.cuda.empty_cache()
         if epoch % conf["hyper_params"]["val"]["n_epochs_val"] == 0:
             val_loss, metric_results = test(val_loader, model, conf, loss_weights)
-            # torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
             metric = sum([metric_results["MAE"][k] for k in conf.physical_labels])
             if metric < scheduler.best:
