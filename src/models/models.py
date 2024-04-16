@@ -372,7 +372,6 @@ class EPD_with_sampling(nn.Module):
         decoded = forward_for_general_layer(self.decoder, X)
         
         if sampling_points is not None:
-
             match self.conf["inference_mode_latent_sampled_points"]:
                 case "squared_distance":
                     # positional_encoding_graph_points = self.positional_encoder(pos)
@@ -450,7 +449,6 @@ class EPD_with_sampling(nn.Module):
                     else:
                         correct_x_BC = torch.FloatTensor(device=x.device)
                     
-
                     update = self.new_edges_update_mlp(
                         torch.concat((
                             aggregated_msg, 
@@ -504,7 +502,7 @@ class PINN(nn.Module):
         # self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
 
 
-    def get_BC_residuals_single_sample(self, x, x_mask, u, v, p, u_x, v_y, p_x, p_y):
+    def get_BC_residuals_pointwise(self, x, x_mask, u, v, p, u_x, v_y, p_x, p_y):
         feat_dict = self.conf["graph_node_feature_dict"]
         mask_dict = self.conf["graph_node_feature_mask"]
 
@@ -528,13 +526,13 @@ class PINN(nn.Module):
                     c += x_mask[mask_dict[k]]
                 case "v_n": # if it's a wall, no problem because v_n=0 (for inlet, see above)
                     v_n_pred = (n_x*u + n_y*v)
-                    # FIXME: denormalization of x[feat_dict["v_n"]] for example for v_inlet --> NOW THE X IS NORMALIZED!
                     residual["v_n"] += (v_n_pred - x[feat_dict["v_n"]]).abs()       * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                 case "p": # only zero for now
                     residual["p"] += (p - x[feat_dict["p"]]).abs()                  * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
                 case "dv_dn": # pressure-outlet = n_x*U_x + n_y*U_y = n_x*u_x + n_y*v_y
+                    # FIXME: is this derivative right?
                     dv_dn_pred = (n_x*u_x + n_y*v_y)
                     residual["dv_dn"] += (dv_dn_pred - x[feat_dict["dv_dn"]]).abs() * x_mask[mask_dict[k]]
                     c += x_mask[mask_dict[k]]
@@ -741,7 +739,7 @@ class PINN(nn.Module):
                 slice_idxs, hess_samp, grads_samp, out_samp)
             # TODO: denormalize here instead than inside single_sample
             if self.conf["flag_BC_PINN"]:
-                residuals = vmap(self.get_BC_residuals_single_sample)(
+                residuals = vmap(self.get_BC_residuals_pointwise)(
                     x_BC, x_mask_BC, u, v, p, u_x, v_y, p_x, p_y
                 )
                 return {"BC_"+k: v for k,v in residuals.items()}, (u_x, u_y, v_x, v_y)
@@ -792,7 +790,7 @@ class PINN(nn.Module):
             if self.conf["general_sampling"]["add_edges"] and (domain_slice.shape[0] != 0):
                 residuals.update({"output_sampled_domain": out_samp[domain_slice]})
 
-            return out_sup, residuals, velocity_derivatives_at_B 
+            return out_sup, residuals, velocity_derivatives_at_B
 
         else:
             out_sup = functional_call(
@@ -884,19 +882,20 @@ class PINN(nn.Module):
 
         def get_values_per_sample(sample_residuals, additional_boundary=None):
             loss_fn = lambda x: x.abs().mean() if self.conf.residual_loss == "MAE" else x.square().mean()
+            loss_fn_LOGGING = lambda x: x.abs().mean()
             sample_loss_dict = {}
             sample_optional_values = {}
             for k in sample_residuals:
                 if "debug_only_" in k:
                     with torch.no_grad():
                         k_to_log = k.removeprefix("debug_only_")
-                        tmp = loss_fn(sample_residuals[k][sample_residuals[k].nonzero()])
+                        tmp = loss_fn_LOGGING(sample_residuals[k][sample_residuals[k].nonzero()])
                         sample_optional_values[k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
                         tmp_dict = {}
                         for comp in set(self.conf.graph_node_features_not_for_training).difference([
                                 "component_id", "is_car", "is_flap", "is_tyre"]):
                             correct_idxs = additional_boundary[:,self.conf.graph_node_features_not_for_training[comp]] == 1
-                            tmp = loss_fn(sample_residuals[k][correct_idxs])
+                            tmp = loss_fn_LOGGING(sample_residuals[k][correct_idxs])
                             
                             sample_optional_values[comp+"_"+k_to_log] = tmp if not tmp.isnan() \
                                 else torch.tensor(0., device=additional_boundary.device)

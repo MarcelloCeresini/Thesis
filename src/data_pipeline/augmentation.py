@@ -219,9 +219,9 @@ class SampleBoundaryPoints(BaseTransform):
             idxs_boundary_sampled = idxs_is_BC.nonzero().view(-1)
 
         # x_BC, x_mask_BC = data.x[idxs_boundary_sampled], data.x_mask[idxs_boundary_sampled]
-        x_BC = data.x[idxs_boundary_sampled]
 
         if self.boundary_sampling["shift_on_face"] and not self.test:
+            x_BC = data.x[idxs_boundary_sampled]
             boundary_sampling_points = vmap(
                 self.get_random_position_on_face, randomness="different")(
                 x_BC, data.pos[idxs_boundary_sampled]

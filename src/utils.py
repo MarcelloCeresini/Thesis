@@ -89,10 +89,10 @@ def match_mesh_and_feature_pts(mesh, features, conf: Config, dim=2, check_biuniv
         features_high_bound = np.abs(features_m*(1+eps))
 
         for i, (mesh_old_idx, ft_old_idx, m_a, ft_lb, ft_hb) in enumerate(zip(mesh_old_idxs,
-                                                                              features_old_idxs,
-                                                                              mesh_abs,
-                                                                              features_low_bound,
-                                                                              features_high_bound)):
+                                                                                features_old_idxs,
+                                                                                mesh_abs,
+                                                                                features_low_bound,
+                                                                                features_high_bound)):
             if (ft_lb<=m_a).all() and (m_a<=ft_hb).all():
                 map_mesh_to_feature[i, 0], map_mesh_to_feature[i, 1] = mesh_old_idx, ft_old_idx
             else:
@@ -304,7 +304,9 @@ def get_cell_data(mesh: meshio.Mesh, conf: Config):
     dict_vertices_in_cells, vertices_in_cells, CcCc_edges_bidir = recreate_cells(mesh, conf)
 
     # Create a mesh from cells instead than from faces
-    cell_mesh = toughio.Mesh(mesh.points, [(key, np.stack(val)) for key, val in dict_vertices_in_cells.items()])
+    ### Was only needed to get cell centers but screwed up the indexing
+    # cell_mesh = toughio.Mesh(mesh.points, [(key, np.stack(val)) for key, val in dict_vertices_in_cells.items()])
+    
 
     cell_volumes = np.fromiter(map(shoelace, [mesh.points[v+[v[0]]][:,:2] for v in vertices_in_cells]), dtype=np.float64)
 
@@ -314,18 +316,28 @@ def get_cell_data(mesh: meshio.Mesh, conf: Config):
     return cell_centers, CcCc_edges_bidir, vertices_in_cells, cell_volumes
 
 
-def get_face_data(face_mesh: meshio.Mesh, vertices_in_cells):
+def get_face_data(face_mesh_components: meshio.Mesh, vertices_in_cells):
 
-    vertices_in_faces = np.concatenate([c.data for c in face_mesh.cells], axis=0) # face_list[face_idx] = [list_of_node_idxs_in_that_face]
+    # extract all faces from all blocks and concat them
+    vertices_in_faces = np.concatenate([c.data for c in face_mesh_components.cells], axis=0) # face_list[face_idx] = [list_of_node_idxs_in_that_face]
     tmp = set([frozenset([vertex_pair[0], vertex_pair[1]]) for vertex_pair in vertices_in_faces])
     vertices_in_faces = np.stack([np.array(list(fset)) for fset in tmp])
 
-    face_areas = np.linalg.norm(face_mesh.points[vertices_in_faces[:,1]] - 
-                                    face_mesh.points[vertices_in_faces[:,0]], axis=1)
+    face_areas = np.linalg.norm(face_mesh_components.points[vertices_in_faces[:,1]] - 
+                                    face_mesh_components.points[vertices_in_faces[:,0]], axis=1)
 
-    face_mesh = toughio.Mesh(face_mesh.points, [("line",vertices_in_faces)])
+    face_mesh = toughio.Mesh(face_mesh_components.points, [("line",vertices_in_faces)])
     face_center_positions = face_mesh.centers
     
+    # for face_center_pos, face_area, face_vertex_1, face_vertex_2 in \
+    #     zip(face_center_positions, face_areas, face_mesh_components.points[vertices_in_faces[:,0]][:,:2], 
+    #         face_mesh_components.points[vertices_in_faces[:,1]][:,:2]):
+    #     plt.scatter(face_center_pos[0], face_center_pos[1], c="y")
+    #     plt.scatter(face_vertex_1[0], face_vertex_1[1], c="b")
+    #     plt.scatter(face_vertex_2[0], face_vertex_2[1], c="b")
+    #     print(face_area)
+    #     pass
+
     CcFc_edges = []
     FcFc_edges = []
     for i, vert_in_cell in enumerate(vertices_in_cells):
@@ -485,7 +497,7 @@ def normalize_label(values, label, conf):
             if label in ["x-velocity", "y-velocity"]:
                 tmp = values / conf["air_speed"]
             elif label == "pressure":
-                tmp = values / (conf["air_speed"]**2)/2
+                tmp = values / conf["Q"] #1/2 * rho * v**2
             else:
                 raise ValueError(f"Physical normalization no available for {label}")
         case "max-normalization":
@@ -521,7 +533,7 @@ def denormalize_label(values, label, conf):
             if label in ["x-velocity", "y-velocity"]:
                 values *= conf["air_speed"]
             elif label == "pressure":
-                values *= (conf["air_speed"]**2)/2
+                values *= conf["Q"]
             else:
                 raise ValueError(f"Physical normalization no available for {label}")
         case "max-normalization":
@@ -647,11 +659,15 @@ def get_coefficients_for_component(
     # normal is inverted for viscous forces
     shear_forces = torch.tensor((0.,0.), device=pressure_forces.device)
     if velocity_derivatives is not None:
-        assert turbulent_values is not None, "Cannot compute forces without turbulent values"
+        assert turbulent_values is not None, "Cannot compute shear forces without turbulent values"
 
         if from_boundary_sampling:
             idxs_is_BC = (data.x_mask[:,-1] == 1)
             slice_vel = data.x_additional[idxs_is_BC, conf.graph_node_features_not_for_training[slice_str]].nonzero()[:,0]
+            
+            ## or
+            # tmp = data.x_additional[idxs_is_BC]
+            # slice_vel =  data.x_additional[idxs_is_BC, conf.graph_node_features_not_for_training[slice_str]].nonzero()[:,0]
             u_x, u_y, v_x, v_y = velocity_derivatives
         else:
             u_x, u_y, v_x, v_y = velocity_derivatives[:,0], velocity_derivatives[:,1], velocity_derivatives[:,2], velocity_derivatives[:,3]
@@ -663,7 +679,7 @@ def get_coefficients_for_component(
             k = denormalize_label(turbulent_values[:,0], "turb-kinetic-energy", conf)
             w = denormalize_label(turbulent_values[:,1], "turb-diss-rate", conf)
         else:
-            # If there is no need to denormalize, it means it comes from csv --> no need to clamp
+            # If there is no need to denormalize, it means it comes from csv
             k, w = turbulent_values[:,0], turbulent_values[:,1]
 
         outward_normal_areas = -data.inward_normal_areas
