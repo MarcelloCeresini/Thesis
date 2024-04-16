@@ -852,7 +852,6 @@ class PINN(nn.Module):
                 w_turb = torch.ones(n, device=device, 
                     dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,4], "sum", include_self=False)
             
-                
 
             normalization_const = torch.zeros(n, device=device).scatter_reduce_(0, idxs, data.new_edges_weights, "sum", include_self=False)
 
@@ -941,7 +940,7 @@ class PINN(nn.Module):
         optional_values = {k:v/batch_size for k,v in optional_values.items()}
 
         if self.conf.get("normalize_denormalized_loss_components", False):
-            supervised_value_ub = loss_dict["supervised"].item() * 10
+            supervised_value_ub = loss_dict["supervised"].item() * 0.5
 
             for k in ["momentum_x", "momentum_y"]:
                 tmp = loss_dict.get(k, None)

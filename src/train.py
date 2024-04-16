@@ -102,15 +102,15 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                 pred_sample_pressure = pred[0][batch.ptr[i]:batch.ptr[i+1], 2]
                 assert batch.ptr.shape[0] == 2, "Check derivatives for batch size higher than 1"
                 if conf.flag_BC_PINN and conf.output_turbulence:
-                    pred_vel_derivatives = torch.stack(pred[2])
+                    pred_vel_derivatives = torch.stack(pred[2][batch.ptr[i]:batch.ptr[i+1]])
                     pred_turb_values = pred[0][batch.ptr[i]:batch.ptr[i+1], 3:]
-                    pred_forces = get_coefficients(conf, data, pred_sample_pressure, 
+                    pred_coefficients = get_coefficients(conf, data, pred_sample_pressure, 
                         velocity_derivatives=pred_vel_derivatives, turbulent_values=pred_turb_values, 
                         denormalize=True, from_boundary_sampling=True)
                 else:
-                    pred_forces = get_coefficients(conf, data, pred_sample_pressure)
+                    pred_coefficients = get_coefficients(conf, data, pred_sample_pressure, denormalize=True)
                 
-                metric_aero.forward(pred=pred_forces,
+                metric_aero.forward(pred=pred_coefficients,
                                     label=data.components_coefficients)
                 
             batch.cpu()
