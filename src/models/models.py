@@ -502,7 +502,7 @@ class PINN(nn.Module):
         # self.loss_weights = {"continuity":1, "momentum_x":1, "momentum_y":1}
 
 
-    def get_BC_residuals_pointwise(self, x, x_mask, u, v, p, u_x, v_y, p_x, p_y):
+    def get_BC_residuals_pointwise(self, x, x_mask, u, v, p, u_x, u_y, v_x, v_y, p_x, p_y):
         feat_dict = self.conf["graph_node_feature_dict"]
         mask_dict = self.conf["graph_node_feature_mask"]
 
@@ -533,9 +533,9 @@ class PINN(nn.Module):
                     c += x_mask[mask_dict[k]]
                 case "dv_dn": # pressure-outlet = n_x*U_x + n_y*U_y = n_x*u_x + n_y*v_y
                     # FIXME: is this derivative right?
-                    dv_dn_pred = (n_x*u_x + n_y*v_y)
-                    residual["dv_dn"] += (dv_dn_pred - x[feat_dict["dv_dn"]]).abs() * x_mask[mask_dict[k]]
-                    c += x_mask[mask_dict[k]]
+                    dv_dn_pred = (n_x*u_x + n_y*u_y) + (n_x*v_x + n_y*v_y)
+                    residual["dv_dn"] += (dv_dn_pred).abs() * x_mask[mask_dict[k]]
+                    c += 2*x_mask[mask_dict[k]]
                     # should be torch.dot(normal, (u_x, v_y)), but pressure-outlet is vertical
                     # residual += u_x
                 case "dp_dn": # 
@@ -740,7 +740,7 @@ class PINN(nn.Module):
             # TODO: denormalize here instead than inside single_sample
             if self.conf["flag_BC_PINN"]:
                 residuals = vmap(self.get_BC_residuals_pointwise)(
-                    x_BC, x_mask_BC, u, v, p, u_x, v_y, p_x, p_y
+                    x_BC, x_mask_BC, u, v, p, u_x, u_y, v_x, v_y, p_x, p_y
                 )
                 return {"BC_"+k: v for k,v in residuals.items()}, (u_x, u_y, v_x, v_y)
             else:

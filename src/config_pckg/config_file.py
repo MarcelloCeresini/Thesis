@@ -27,6 +27,7 @@ class Config():
 
         self.DATA_DIR = os.path.join(self.ROOT_DIR, "data")
         self.device: Literal["cpu", "cuda"] = "cuda"
+        self.DEBUG_BYPASS_MODEL = False
 
         ##### external folders
         self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
@@ -169,6 +170,7 @@ class Config():
         self.atm = 101325 # Pa
         self.air_dynamic_viscosity = 1.7894e-5 # kg/(m*s)
         self.air_density = 1.225 # kg/m^3
+        self.Q = (self.air_density * self.air_speed**2)/2
         self.air_kinematic_viscosity = self.air_dynamic_viscosity / self.air_density # m^2/s
         self.L = 1 # m
         self.reference_area = 1 
@@ -323,12 +325,12 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.2}
+                                    "percentage": 0.5}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "all_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
-                                    "percentage": 1.5,
+                                    "percentage": 3.,
                                     "shift_on_face":True}
 
         self.general_sampling = {"add_edges": True,
@@ -341,9 +343,9 @@ class Config():
         self.standard_weights = {
             "supervised": 1,
             "supervised_on_sampled": 1,
-            "boundary": 5,
-            "continuity": 5,
-            "momentum_x": 2,
+            "boundary": 15,
+            "continuity": 10,
+            "momentum_x": 3,
         }
         self.standard_weights["momentum_y"] = self.standard_weights["momentum_x"]
 

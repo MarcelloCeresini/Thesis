@@ -1,12 +1,12 @@
 training:
   lr: 0.001
   weight_decay: 0.0001
-  n_epochs: 1000
+  n_epochs: 10000
   patience_reduce_lr: 150 # need to be divisible by "n_epochs_val" below
   cooldown: 100
   patience_end_training: 260 #same
   min_lr: 0.00001
-  batch_size: 2
+  batch_size: 1
   n_workers_dataloaders: 0
 
 val:
