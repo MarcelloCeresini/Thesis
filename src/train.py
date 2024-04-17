@@ -9,12 +9,13 @@ import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 import torch_geometric.data as pyg_data
-import wandb
 from torch.optim import Adam
 import torch.optim.lr_scheduler as lr_scheduler 
 from torch.masked import masked_tensor
 from pandas import json_normalize
 import torchmetrics
+import wandb
+from wandb_osh.hooks import TriggerWandbSyncHook
 
 from utils import print_memory_state_gpu, get_input_to_model, get_coefficients, normalize_label
 from config_pckg.config_file import Config 
@@ -160,7 +161,10 @@ def train(
         val_loader,
         dataloader_train_for_metrics,
         conf: Config,
-        run_name: str):
+        run_name: str,
+        **kwargs):
+    
+    trigger_sync: Optional[TriggerWandbSyncHook] = kwargs.get("trigger_sync", None)
 
     if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_checkpoints")):
         os.mkdir(os.path.join(conf["DATA_DIR"], "model_checkpoints"))
@@ -284,6 +288,9 @@ def train(
         log_dict.update(total_optional_values)
 
         wandb.log(log_dict, epoch)
+        
+        if trigger_sync is not None:
+            trigger_sync()
         
         # torch.cuda.empty_cache()
         if epoch % conf["hyper_params"]["val"]["n_epochs_val"] == 0:

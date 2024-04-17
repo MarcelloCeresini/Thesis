@@ -30,7 +30,14 @@ class Config():
         self.DEBUG_BYPASS_MODEL = False
 
         ##### external folders
-        self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
+        self.platform = sys.platform
+        if self.platform == "linux" or self.platform == "linux2":
+            self.EXTERNAL_FOLDER = self.DATA_DIR
+            self.new_home = os.path.join("/gpfs", "prj", "cfd", "CFD-RD_SOLVER", "marcello")
+            self.wandb_communication_dir = os.path.join("/gpfs", "prj", "cfd", "CFD-RD_SOLVER", "marcello", ".wandb_communication_dir")
+        else:
+            self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
+        
         self.EXTERNAL_FOLDER_MSH = os.path.join(self.EXTERNAL_FOLDER, "Mesh_ascii")
         self.EXTERNAL_FOLDER_CSV = os.path.join(self.EXTERNAL_FOLDER, "CSV_ascii")
         self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
@@ -357,6 +364,10 @@ class Config():
             })
 
         self.normalize_denormalized_loss_components = True
+        self.minimum_continuity_relative_weight = 0.01
+        self.minimum_momentum_relative_weight = 0.01
+        self.maximum_momentum_relative_weight = 0.5
+
 
         self.dynamic_loss_weights = False
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"

@@ -746,20 +746,20 @@ class PINN(nn.Module):
             else:
                 return {}, ()
 
-
-        batch_sampling_points = torch.concatenate((batch_domain_nodes, batch_boundary_nodes)).to(x.device)
-
-        new_edges = torch.cat((
-            new_edges,
-            idxs_boundary_sampled.view(-1,1).repeat(1,3)))
-
-        domain_slice = torch.arange(n_domain_points)
-        boundary_slice = torch.arange(start=n_domain_points, end=n_domain_points+n_boundary_points)
         
-        model_params = ({k: v for k, v in self.net.named_parameters()}, 
-                        {k: v for k, v in self.net.named_buffers()},)
-        
-        if sampling_points.shape[0]!=0:
+        if sampling_points.shape[0] != 0:
+            
+            batch_sampling_points = torch.concatenate((batch_domain_nodes, batch_boundary_nodes)).to(x.device)
+
+            new_edges = torch.cat((
+                new_edges,
+                idxs_boundary_sampled.view(-1,1).repeat(1,3)))
+
+            domain_slice = torch.arange(n_domain_points)
+            boundary_slice = torch.arange(start=n_domain_points, end=n_domain_points+n_boundary_points)
+            
+            model_params = ({k: v for k, v in self.net.named_parameters()}, 
+                            {k: v for k, v in self.net.named_buffers()},)
         # assert sampling_points.shape[0]!=0, "No sense in using PINN if no sampling is done, use another model"
 
             ####################################################################################
@@ -939,12 +939,24 @@ class PINN(nn.Module):
         optional_values = {k:v/batch_size for k,v in optional_values.items()}
 
         if self.conf.get("normalize_denormalized_loss_components", False):
-            supervised_value_ub = loss_dict["supervised"].item() * 0.5
+            supervised_value_lb = loss_dict["supervised"].item() * self.conf.minimum_continuity_relative_weight
+            
+            tmp = loss_dict.get("continuity", None)
+            if tmp is not None and tmp != 0 and tmp < supervised_value_lb:
+                    loss_dict[k] = (supervised_value_lb) * tmp / tmp.item()
+
+            supervised_value_lb = loss_dict["supervised"].item() * self.conf.minimum_momentum_relative_weight
+            supervised_value_ub = loss_dict["supervised"].item() * self.conf.maximum_momentum_relative_weight
 
             for k in ["momentum_x", "momentum_y"]:
                 tmp = loss_dict.get(k, None)
-                if tmp is not None and tmp != 0 and tmp > supervised_value_ub:
-                    loss_dict[k] = (supervised_value_ub) * tmp / tmp.item()
+                if tmp is not None and tmp != 0:
+                    if tmp < supervised_value_lb:
+                        loss_dict[k] = (supervised_value_lb) * tmp / tmp.item()
+                    elif tmp > supervised_value_ub:
+                        loss_dict[k] = (supervised_value_ub) * tmp / tmp.item()
+
+            
         # for k in residuals:
         #     if "debug_only_" in k:
         #         with torch.no_grad():

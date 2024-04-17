@@ -4,9 +4,9 @@ import pickle
 import sys
 from typing import Literal, Optional, Union
 import itertools
+from pathlib import Path, PureWindowsPath
 
 from tqdm import tqdm
-import wandb
 import meshio
 import pyvista
 import toughio
@@ -24,6 +24,10 @@ from torch_geometric.utils import to_dense_adj
 from rustworkx import PyGraph
 from rustworkx import distance_matrix
 from torch import vmap
+import wandb
+from wandb_osh.hooks import TriggerWandbSyncHook, _comm_default_dir
+from wandb_osh.util.log import logger
+from wandb_osh.util.hash_id import hash_id
 
 from config_pckg.config_file import Config
 import read_mesh_meshio_forked
@@ -34,10 +38,19 @@ def init_wandb(conf: Config, overwrite_WANDB_MODE: Optional[Literal["online", "o
     if overwrite_WANDB_MODE is not None:
         conf.WANDB_MODE = overwrite_WANDB_MODE
     os.environ["WANDB_MODE"] = conf.WANDB_MODE
-    wandb.init(
-        project="Thesis",
-        config=conf
-    )
+    
+    if conf.platform == "linux" or conf.platform == "linux2":
+        wandb.init(
+            project="Thesis",
+            config=conf,
+            dir = conf.new_home
+        )
+    else:
+        wandb.init(
+            project="Thesis",
+            config=conf,
+            settings={"symlink": True},
+        )
 
 
 def read_mesh(filename, mode: Literal["meshio", "pyvista", "toughio"], conf: Config):
@@ -641,7 +654,7 @@ def get_coefficients_for_component(
     if slice.shape[0] == 0:
         return torch.tensor((0., 0.), device=slice.device), torch.tensor((0., 0.), device=slice.device)
     
-    pressure_values = pressure_values[slice]
+    pressure_values = copy.copy(pressure_values[slice])
     inward_normal_areas = data.inward_normal_areas[slice]
 
     # plt.scatter(data.pos[slice,0], data.pos[slice,1])
@@ -1782,3 +1795,34 @@ def plot_test_images_from_model(conf, model, run_name, test_dataloader):
             if gettrace():
                 print('Hmm, Big Debugger is watching me --> printing only one')
                 break
+
+
+
+class TriggerWandbSyncHookForWindows(TriggerWandbSyncHook):
+    def __call__(self, logdir: str | os.PathLike | None = None):
+        '''
+        With respect to original, changes the name with something that is 
+        visible to the head node. Needed if the directory is not identical between
+        head and other nodes'''
+        if logdir is None:
+            # run.dir actually points to the `/files` subdirectory of the run,
+            # but we need the directory above that.
+            logdir = Path(wandb.run.dir).parent.resolve()
+        
+        trial_dir = Path(logdir).resolve()
+        relative_folders = str(trial_dir).split(os.sep)
+        windows_absolute_trial_path = PureWindowsPath("H:\\", relative_folders[-4], relative_folders[-3], relative_folders[-2], relative_folders[-1])
+        
+        cmd_fname = hash_id(str(trial_dir)) + ".command"
+        # In case the communication dir was deleted since we initialized this class
+        self.communication_dir.mkdir(parents=True, exist_ok=True)
+        
+        command_file = self.communication_dir / cmd_fname
+        if command_file.is_file():
+            logger.warning(
+                "Syncing not active or too slow: Command %s file still exists",
+                command_file,
+            )
+        command_file.touch(exist_ok=True)
+        command_file.write_text(windows_absolute_trial_path.as_posix())
+        logger.debug("Wrote command file %s", command_file)

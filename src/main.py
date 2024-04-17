@@ -10,13 +10,14 @@ from torch_geometric.nn import summary
 from pandas import json_normalize
 from tqdm import tqdm
 import wandb
+from wandb_osh.hooks import TriggerWandbSyncHook
 
 
 from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders
 from train import train, test
 from utils import plot_gt_pred_label_comparison, print_memory_state_gpu, \
-    get_input_to_model, init_wandb, plot_test_images_from_model
+    get_input_to_model, init_wandb, plot_test_images_from_model, TriggerWandbSyncHookForWindows
 from models.models import get_model_instance
 
 def print_w_time(str):
@@ -26,6 +27,7 @@ def print_w_time(str):
 if __name__ == "__main__":
 
         WANDB_MODE: Literal["online", "offline"] = "online"
+
 
         gettrace = getattr(sys, 'gettrace', None)
         if gettrace is not None:
@@ -38,10 +40,16 @@ if __name__ == "__main__":
             WANDB_MODE="offline"
 
         init_wandb(Config(), overwrite_WANDB_MODE=WANDB_MODE)
+
         torch.cuda.empty_cache()
         torch.autograd.set_detect_anomaly(True, True)
 
         conf = wandb.config
+            
+        if platform == "linux" or platform == "linux2":
+            trigger_sync = TriggerWandbSyncHookForWindows(communication_dir=conf.wandb_communication_dir)
+        else:
+            trigger_sync = None
 
         if conf.device == "cpu":
             ResourceWarning("YOU ARE USING THE CPU")
@@ -80,7 +88,7 @@ if __name__ == "__main__":
         # print(model_summary)
 
         print_w_time("TRAINING")
-        model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name)
+        model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name, trigger_sync=trigger_sync)
 
         print_w_time("SAVING MODEL")
         if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_runs")):
