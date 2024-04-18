@@ -752,6 +752,8 @@ class PINN(nn.Module):
                 return {}, ()
 
         residuals = {}
+        model_params = ({k: v for k, v in self.net.named_parameters()}, 
+                        {k: v for k, v in self.net.named_buffers()},)
 
         if sampling_points.shape[0] != 0:
             
@@ -764,9 +766,6 @@ class PINN(nn.Module):
             domain_slice = torch.arange(n_domain_points)
             boundary_slice = torch.arange(start=n_domain_points, end=n_domain_points+n_boundary_points)
             
-            model_params = ({k: v for k, v in self.net.named_parameters()}, 
-                            {k: v for k, v in self.net.named_buffers()},)
-        # assert sampling_points.shape[0]!=0, "No sense in using PINN if no sampling is done, use another model"
 
             ####################################################################################
             hess_samp, grads_samp, out_samp, out_sup = vmap(
