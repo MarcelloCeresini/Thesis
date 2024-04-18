@@ -290,18 +290,21 @@ class Config():
 
         self.metric_aero = metrics.AeroMetric
 
-        self.bool_radial_attributes = True
+
+        ################################################
+
+        self.bool_radial_attributes = False
         if self.bool_radial_attributes:
             self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)+self.n_radial_attributes
         else:
             self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)
 
         self.PINN_mode: Literal["supervised_only", "supervised_with_sampling", "continuity_only", "full_laminar", "turbulent_kw"] \
-            = "turbulent_kw"
+            = "supervised_only"
         
-        self.bool_algebraic_continuity = True
+        self.bool_algebraic_continuity = False
         
-        self.output_turbulence: bool = True
+        self.output_turbulence: bool = False
         if self.PINN_mode == "turbulent_kw" and not self.output_turbulence:
             print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
             self.output_turbulence = True
@@ -325,7 +328,7 @@ class Config():
         self.bool_bootstrap_bias = True
         self.bootstrap_bias = {k:self.dict_labels_train["mean"][k] for k in self.labels_to_keep_for_training}
 
-        self.flag_BC_PINN: bool = True
+        self.flag_BC_PINN: bool = False
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] \
             = "new_edges"
         self.graph_sampling_p_for_interpolation = 0.01
@@ -371,7 +374,6 @@ class Config():
         self.minimum_continuity_relative_weight = 0.01
         self.minimum_momentum_relative_weight = 0.01
         self.maximum_momentum_relative_weight = 0.5
-
 
         self.dynamic_loss_weights = False
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"

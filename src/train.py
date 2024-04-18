@@ -98,10 +98,6 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
             total_loss += loss.item() * batch.num_graphs
             metric_dict = forward_metric_results(pred[0].cpu(), labels.cpu(), conf, metric_dict)
             
-            ptr_num_sampled_boundary = torch.tensor([batch.num_boundary_sampling_points[:i].sum() 
-                                                for i in range(batch.num_boundary_sampling_points.shape[0]+1)])
-            
-            
             for i in range(len(batch)):
                 data = batch[i]
                 
@@ -114,6 +110,8 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                 pred_supervised_pts_pressure = pred[0][batch.ptr[i]:batch.ptr[i+1], 2]
                 assert batch.ptr.shape[0] == 2, "Check derivatives for batch size higher than 1"
                 if conf.flag_BC_PINN and conf.output_turbulence:
+                    ptr_num_sampled_boundary = torch.tensor([batch.num_boundary_sampling_points[:i].sum() 
+                        for i in range(batch.num_boundary_sampling_points.shape[0]+1)])
                     pred_vel_derivatives = torch.stack(
                         [p[ptr_num_sampled_boundary[i]:ptr_num_sampled_boundary[i+1]] for p in pred[2]])
                     pred_turb_values = pred[0][batch.ptr[i]:batch.ptr[i+1], 3:]
