@@ -21,13 +21,13 @@ class CfdDataset(InMemoryDataset):
     def __init__(self, split_idxs, root: str | None = None, transform: Callable[..., Any] | None = None, pre_transform: Callable[..., Any] | None = None, pre_filter: Callable[..., Any] | None = None, log: bool = True):
         super().__init__(root, transform, pre_transform, pre_filter, log)
         self.split_idxs = split_idxs
+        self.data_filenames = np.array(sorted(glob.glob(pathname="*.pt", root_dir=self.root)))[self.split_idxs]
 
     def len(self):
         return self.split_idxs.shape[0]
 
     def get(self, idx: int) -> BaseData:
-        data_filenames = np.array(sorted(glob.glob(pathname="*.pt", root_dir=self.root)))[self.split_idxs]
-        return torch.load(os.path.join(self.root, data_filenames[idx]))
+        return torch.load(os.path.join(self.root, self.data_filenames[idx]))
 
 
 def get_data_loaders(conf):
@@ -37,18 +37,21 @@ def get_data_loaders(conf):
     general_transforms = []
     
     if conf["flag_BC_PINN"]:
-        transform_list_train.append(SampleBoundaryPoints(conf))
-        transform_list_test.append(SampleBoundaryPoints(conf, test=True))
+        transform_list_train.append(SampleBoundaryPoints(conf["boundary_sampling"], conf["graph_node_feature_dict"]))
+        transform_list_test.append(SampleBoundaryPoints(conf["boundary_sampling"], conf["graph_node_feature_dict"], test=True))
     if conf["PINN_mode"] != "supervised_only":
-        transform_list_train.append(SampleDomainPoints(conf))
-        transform_list_test.append(SampleDomainPoints(conf, test=True))
+        transform_list_train.append(SampleDomainPoints(conf["domain_sampling"], conf["general_sampling"],
+            conf["output_dim"], conf["n_sampled_new_edges"]))
+        transform_list_test.append(SampleDomainPoints(conf["domain_sampling"], conf["general_sampling"],
+            conf["output_dim"], conf["n_sampled_new_edges"], test=True))
 
     if not conf["bool_radial_attributes"]:
-        general_transforms.append(RemoveRadialAttributes(conf))
+        general_transforms.append(RemoveRadialAttributes(conf["n_radial_attributes"]))
     if not conf["output_turbulence"]:
         general_transforms.append(RemoveTurbulentLabels())
 
-    general_transforms.append(NormalizeLabels(conf))
+    general_transforms.append(NormalizeLabels(conf["labels_to_keep_for_training"],
+        conf["label_normalization_mode"], conf["dict_labels_train"], conf["air_speed"], conf["Q"]))
 
     transforms_train = pyg_t.Compose(transform_list_train+general_transforms)
     transforms_test = pyg_t.Compose(transform_list_test+general_transforms)
@@ -66,7 +69,13 @@ def get_data_loaders(conf):
                             persistent_workers=n_workers_train>0,
                             pin_memory=True
                             )
-    val_dataloader  = DataLoader(dataset_val, batch_size=1, pin_memory=False, shuffle=False)
+    val_dataloader  = DataLoader(dataset_val, 
+                            batch_size=1, 
+                            shuffle=False,
+                            num_workers=2,
+                            persistent_workers=True, 
+                            pin_memory=True, 
+                            )
     test_dataloader = DataLoader(dataset_test, batch_size=1, shuffle=False)
     train_dataloader_for_metrics = DataLoader(dataset_train_for_metrics, batch_size=1, shuffle=False)
 

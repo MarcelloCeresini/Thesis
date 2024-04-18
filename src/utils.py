@@ -500,17 +500,15 @@ def normalize_features(features, conf):
             raise NotImplementedError("Only implemented 'None' and 'Physical'")
 
 
-def normalize_label(values, label, conf):
-    label_normalization_mode = conf["label_normalization_mode"]
-    dict_labels_train = conf["dict_labels_train"] 
+def normalize_label(values, label, label_normalization_mode, dict_labels_train, air_speed, Q):
 
     # TODO: maybe add a graph-wise norm?
     match label_normalization_mode[label]["main"]:
         case "physical":
             if label in ["x-velocity", "y-velocity"]:
-                tmp = values / conf["air_speed"]
+                tmp = values / air_speed
             elif label == "pressure":
-                tmp = values / conf["Q"] #1/2 * rho * v**2
+                tmp = values / Q #1/2 * rho * v**2
             else:
                 raise ValueError(f"Physical normalization no available for {label}")
         case "max-normalization":
@@ -1391,7 +1389,7 @@ class MeshCompleteInfo:
         face_pyv_mesh = pyvista.UnstructuredGrid(
                             face_list_for_pyvista,
                             facetype_list_for_pyvista,
-                            self.mesh.points
+                            self.mesh.points,
                         )
         
         cell_list_for_pyvista = np.concatenate(
@@ -1425,7 +1423,7 @@ class MeshCompleteInfo:
             cell_pyv_mesh.cell_data[lab+"_diff"] = self.cell_center_labels[lab] - cell_pred_lables[lab]
             face_pyv_mesh.cell_data[lab] = self.face_center_labels[lab]
             face_pyv_mesh.cell_data[lab+"_pred"] = face_pred_labels[lab]
-            face_pyv_mesh.cell_data[lab+"_diff"] = self.face_center_labels[lab] - face_pred_labels[lab]
+            face_pyv_mesh.cell_data[lab+"_diff"] = self.face_center_labels[lab].reset_index(drop=True) - face_pred_labels[lab]
 
         off_screen = True
         pl = pyvista.Plotter(shape=(3, len(columns)), off_screen=off_screen)
@@ -1434,32 +1432,40 @@ class MeshCompleteInfo:
             pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab, 
                 lighting=False, 
                 scalar_bar_args={"title":f"GT_{lab}"},
-                cmap="Spectral")
+                cmap="Spectral",
+                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
             pl.camera_position = "xy"
 
             pl.subplot(1,i)
             pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_pred", 
                 lighting=False, 
                 scalar_bar_args={"title":f"PRED_{lab}"}, 
-                cmap="Spectral")
+                cmap="Spectral",
+                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
             pl.camera_position = "xy"
 
             pl.subplot(2,i)
             pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_diff", 
                 lighting=False, 
                 scalar_bar_args={"title":f"DIFF_{lab}"}, 
-                cmap="Spectral")
+                cmap="Spectral",
+                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
             pl.camera_position = "xy"
         pl.link_views()
+
         if not os.path.isdir(self.conf["test_htmls_comparisons"]):
             os.mkdir(self.conf["test_htmls_comparisons"])
         if not os.path.isdir(self.conf["test_imgs_comparisons"]):
             os.mkdir(self.conf["test_imgs_comparisons"])
+        if not os.path.isdir(self.conf["test_vtk_comparisons"]):
+            os.mkdir(self.conf["test_vtk_comparisons"])
 
         if not os.path.isdir(os.path.join(self.conf["test_htmls_comparisons"], run_name)):
             os.mkdir(os.path.join(self.conf["test_htmls_comparisons"], run_name))
         if not os.path.isdir(os.path.join(self.conf["test_imgs_comparisons"], run_name)):
             os.mkdir(os.path.join(self.conf["test_imgs_comparisons"], run_name))
+        if not os.path.isdir(os.path.join(self.conf["test_vtk_comparisons"], run_name)):
+            os.mkdir(os.path.join(self.conf["test_vtk_comparisons"], run_name))
 
         pl.camera.zoom(1.6)
         pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_cell.html"))
@@ -1473,22 +1479,26 @@ class MeshCompleteInfo:
             pl.add_mesh(face_pyv_mesh.copy(), scalars=lab, 
                 lighting=False, 
                 scalar_bar_args={"title":f"GT_{lab}"},
-                cmap="Spectral")
+                cmap="Spectral",
+                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
             pl.camera_position = "xy"
 
             pl.subplot(1,i)
             pl.add_mesh(face_pyv_mesh.copy(), scalars=lab+"_pred", 
                 lighting=False, 
                 scalar_bar_args={"title":f"PRED_{lab}"}, 
-                cmap="Spectral")
+                cmap="Spectral",
+                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
             pl.camera_position = "xy"
 
             pl.subplot(2,i)
             pl.add_mesh(face_pyv_mesh.copy(), scalars=lab+"_diff", 
                 lighting=False, 
                 scalar_bar_args={"title":f"DIFF_{lab}"}, 
-                cmap="Spectral")
+                cmap="Spectral",
+                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
             pl.camera_position = "xy"
+
         pl.link_views()
         pl.camera.zoom(1.6)
         pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_face.html"))
@@ -1510,7 +1520,7 @@ class MeshCompleteInfo:
                 flag_boundaries = True
 
         if flag_boundaries:
-            cmap = "Greys"
+            cmap = "cool"
             pl = pyvista.Plotter(shape=(2, 3), off_screen=off_screen)
             pl.subplot(0,0)
             pl.add_mesh(face_pyv_mesh.copy(), lighting=False, cmap=cmap, 
@@ -1555,14 +1565,18 @@ class MeshCompleteInfo:
         tmp_idx = data.idx_of_triangulated_cell.detach().numpy()
         present_residuals_domain = []
         for k, v in model_output[1].items():
-            v = np.abs(v.detach().numpy())
             if v.shape[0] == tmp_idx.shape[0] and len(v.shape)==1:
+                v = np.abs(v.detach().numpy())
                 tmp = [np.mean(v[tmp_idx[i]]) for i in range(cell_shape)]
                 cell_pyv_mesh.cell_data[k] = tmp
                 present_residuals_domain.append(k)
-        
+            elif v.shape[0] == data.n_cells: # algebraic_continuity
+                v = v.detach().numpy()
+                cell_pyv_mesh.cell_data[k] = v
+                present_residuals_domain.append(k)
+
         if len(present_residuals_domain) > 0:
-            cmap = "Greys"
+            cmap = "cool"
             pl = pyvista.Plotter(shape=(1, len(present_residuals_domain)), off_screen=off_screen)
             
             for i, k in enumerate(present_residuals_domain):
@@ -1577,6 +1591,9 @@ class MeshCompleteInfo:
             pl.screenshot(
                 filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_domain_res.png"),
                 window_size=(1920,1200))
+        
+        cell_pyv_mesh.save(os.path.join(self.conf["test_vtk_comparisons"], run_name, self.name+"_cell.vtk"))
+        face_pyv_mesh.save(os.path.join(self.conf["test_vtk_comparisons"], run_name, self.name+"_face.vtk"))
 
 def print_memory_state_gpu(text, conf):
     if conf.device == "cuda":
@@ -1601,6 +1618,8 @@ def get_input_to_model(batch):
         "x_additional_boundary": getattr(batch, "x_additional_boundary", None),
         "num_domain_sampling_points": getattr(batch, "num_domain_sampling_points", None),
         "num_boundary_sampling_points": getattr(batch, "num_boundary_sampling_points", None),
+        "faces_in_cell": getattr(batch, "faces_in_cell", None),
+        "n_cells": getattr(batch, "n_cells", None),
     }
 
 
@@ -1697,6 +1716,7 @@ def convert_mesh_complete_info_obj_to_graph(
                 padding_value=-1
             ).T
             data.len_faces = torch.tensor([len(f) for f in tmp])
+            data.n_cells = data.len_faces.shape[0]
 
             sampling_weights = torch.stack(
                 [get_maximum_difference(data.y[faces_in_cells]) for faces_in_cells in tmp])

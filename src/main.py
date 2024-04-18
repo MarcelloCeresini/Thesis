@@ -28,7 +28,6 @@ if __name__ == "__main__":
 
         WANDB_MODE: Literal["online", "offline"] = "online"
 
-
         gettrace = getattr(sys, 'gettrace', None)
         if gettrace is not None:
             if gettrace():

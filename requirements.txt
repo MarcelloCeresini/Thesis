@@ -26,6 +26,7 @@ trame-server
 trame-vtk
 trame-vuetify
 wandb
+wandb_osh
 meshio
 networkx
 pandas

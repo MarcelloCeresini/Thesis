@@ -1,3 +1,4 @@
+import copy
 from inspect import getfullargspec
 from typing import Literal, Optional
 import numpy as np
@@ -292,7 +293,9 @@ class EPD_with_sampling(nn.Module):
         if self.conf.get("bool_bootstrap_bias",False):
             init_bias = torch.zeros_like(self.decoder[-1].bias)
             for i, (k, value) in enumerate(self.conf["bootstrap_bias"].items()):
-                init_bias[i] = normalize_label(value, k, self.conf)
+                init_bias[i] = normalize_label(value, k, 
+                    self.conf.label_normalization_mode, self.conf.dict_labels_train, 
+                    self.conf.air_speed, self.conf.Q)
             with torch.no_grad():
                 self.decoder[-1].bias = nn.Parameter(init_bias.to(torch.float32))
 
@@ -577,6 +580,8 @@ class PINN(nn.Module):
             batch: torch.Tensor,
             num_domain_sampling_points: torch.Tensor,
             num_boundary_sampling_points: torch.Tensor,
+            n_cells: torch.Tensor,
+            faces_in_cell: torch.Tensor,
             triangulated_cells: Optional[torch.Tensor] = None,
             # triangulation: Delaunay, # TODO: if sampling = "all" precompute triangulation for each sample to ease computation 
             **kwargs
@@ -746,7 +751,8 @@ class PINN(nn.Module):
             else:
                 return {}, ()
 
-        
+        residuals = {}
+
         if sampling_points.shape[0] != 0:
             
             batch_sampling_points = torch.concatenate((batch_domain_nodes, batch_boundary_nodes)).to(x.device)
@@ -763,7 +769,6 @@ class PINN(nn.Module):
         # assert sampling_points.shape[0]!=0, "No sense in using PINN if no sampling is done, use another model"
 
             ####################################################################################
-            residuals = {}
             hess_samp, grads_samp, out_samp, out_sup = vmap(
                 compute_second_derivative, out_dims=(0,0,0,None), randomness="different")(
                     sampling_points, new_edges, batch_sampling_points
@@ -790,21 +795,78 @@ class PINN(nn.Module):
             if self.conf["general_sampling"]["add_edges"] and (domain_slice.shape[0] != 0):
                 residuals.update({"output_sampled_domain": out_samp[domain_slice]})
 
-            return out_sup, residuals, velocity_derivatives_at_B
-
         else:
             out_sup = functional_call(
                 self.net,
                 model_params,
                 (x, x_mask, edge_index, edge_attr, pos, batch),
             )
-            return out_sup, {}, ()
+            velocity_derivatives_at_B = ()
+
+        if self.conf.get("bool_algebraic_continuity", False):
+            ptr_cells = torch.tensor([n_cells[:i].sum() for i in range(n_cells.shape[0]+1)])
+            faces_in_cell = torch.clone(faces_in_cell)
+            for i in range(n_cells.shape[0]):
+                faces_in_cell_slice = faces_in_cell[ptr_cells[i]:ptr_cells[i+1]]
+                mask = faces_in_cell_slice != -1
+                faces_in_cell[ptr_cells[i]:ptr_cells[i+1],:][mask] += ptr_cells[i]
+
+            algebraic_continuity = vmap(self.compute_algebraic_continuity_for_one_cell, in_dims=(0,None,None,None,None,None))(
+                faces_in_cell,                           # faces_in_cell_idxs
+                pos[:,:2],                               # all_face_center_positions
+                x[:,:2],                                 # all_tangents
+                x[:,2],                                  # all_areas
+                out_sup[:,0],    # all_u
+                out_sup[:,1])    # all_v
+
+            residuals.update({"algebraic_continuity":algebraic_continuity})
+        
+        return out_sup, residuals, velocity_derivatives_at_B
 
 
-    def loss(self, pred:torch.Tensor, label:torch.Tensor, data: pyg_data.Data):
+    def compute_algebraic_continuity_for_one_cell(self,
+            faces_in_cell_idxs, 
+            all_face_center_positions, all_tangents, all_areas, all_u, all_v):
+
+        faces_in_cell_idxs_repeated = faces_in_cell_idxs.repeat(2,1).T
+        face_center_positions = torch.where(faces_in_cell_idxs_repeated == -1, torch.zeros_like(faces_in_cell_idxs_repeated),
+            all_face_center_positions[faces_in_cell_idxs])
+
+        n_faces_in_cell = (faces_in_cell_idxs != -1).sum()
+        cell_center_position = torch.sum(face_center_positions, dim=0) / n_faces_in_cell
+
+        CcFc_vectors = torch.where(faces_in_cell_idxs_repeated == -1, torch.ones_like(faces_in_cell_idxs_repeated),
+            all_face_center_positions[faces_in_cell_idxs] - cell_center_position)
+        
+        tangents = torch.where(faces_in_cell_idxs_repeated == -1, torch.ones_like(faces_in_cell_idxs_repeated),
+            all_tangents[faces_in_cell_idxs])
+        
+        normals = torch.stack(
+            (-tangents[:,1], tangents[:,0])
+        ).T
+
+        areas = torch.where(faces_in_cell_idxs == -1, torch.zeros_like(faces_in_cell_idxs),
+            all_areas[faces_in_cell_idxs])
+
+        u = torch.where(faces_in_cell_idxs == -1, torch.zeros_like(faces_in_cell_idxs),
+            all_u[faces_in_cell_idxs])
+        
+        v = torch.where(faces_in_cell_idxs == -1, torch.zeros_like(faces_in_cell_idxs),
+            all_v[faces_in_cell_idxs])
+        
+        outward_normals = torch.where((vmap(torch.dot, in_dims=(0,0))(CcFc_vectors, normals) > 0).repeat(2,1).T,
+            normals, -normals)
+        
+        algebraic_continuity_x = torch.sum(areas*outward_normals[:,0]*u)
+        algebraic_continuity_y = torch.sum(areas*outward_normals[:,1]*v)
+
+        return self.conf.air_density*(algebraic_continuity_x+algebraic_continuity_y)
+
+
+    def loss(self, pred:torch.Tensor, label:torch.Tensor, data: pyg_data.Data|pyg_data.Batch):
 
         out_supervised, residuals = pred[0], pred[1]
-        batch_size = data.ptr.shape[0]-1
+        batch_size = data.batch_size
         assert isinstance(out_supervised, torch.Tensor)
         assert isinstance(residuals, dict)
         assert out_supervised.shape[0] == label.shape[0], f"Dimensions do not match: out_supervised.shape[0] = {out_supervised.shape[0]} \
@@ -849,7 +911,6 @@ class PINN(nn.Module):
                     dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,3], "sum", include_self=False)
                 w_turb = torch.ones(n, device=device, 
                     dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,4], "sum", include_self=False)
-            
 
             normalization_const = torch.zeros(n, device=device).scatter_reduce_(0, idxs, data.new_edges_weights, "sum", include_self=False)
 
@@ -906,11 +967,13 @@ class PINN(nn.Module):
                     sample_loss_dict[k] = loss_fn(residuals[k])
             return sample_loss_dict, sample_optional_values
 
-
         flag_boundary = residuals.get("boundary", None)
         if flag_boundary is not None:
             num_sampled_BC = data.num_boundary_sampling_points
             ptr_num_sampled_BC = torch.tensor([num_sampled_BC[:i].sum() for i in range(num_sampled_BC.shape[0]+1)])
+
+        if self.conf.get("bool_algebraic_continuity", False):
+            ptr_cells = torch.tensor([data.n_cells[:i].sum() for i in range(data.n_cells.shape[0]+1)])
 
         optional_values = {}
         sample_residuals = {}
@@ -920,6 +983,8 @@ class PINN(nn.Module):
                 # [data.ptr[i]:data.ptr[i+1]]
                 if k in ["continuity", "momentum_x", "momentum_y"]: # domain sampling
                     sample_residuals[k] = residuals[k][ptr_num_sampled[i]:ptr_num_sampled[i+1]]
+                elif k == "algebraic_continuity":
+                    sample_residuals[k] = residuals[k][ptr_cells[i]:ptr_cells[i+i]]
                 else: # boundary sampling
                     sample_residuals[k] = residuals[k][ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]]
             
@@ -927,8 +992,8 @@ class PINN(nn.Module):
                 x_additional_boundary_sliced = x_additional_boundary[ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]]
             else:
                 x_additional_boundary_sliced = None
-            sample_loss_dict, sample_optional_values = get_values_per_sample(sample_residuals, 
-                                x_additional_boundary_sliced)
+            sample_loss_dict, sample_optional_values = get_values_per_sample(
+                sample_residuals, x_additional_boundary_sliced)
             
             for k in sample_loss_dict:
                 loss_dict[k] = loss_dict.get(k,0) + sample_loss_dict[k]
@@ -939,14 +1004,14 @@ class PINN(nn.Module):
         optional_values = {k:v/batch_size for k,v in optional_values.items()}
 
         if self.conf.get("normalize_denormalized_loss_components", False):
-            supervised_value_lb = loss_dict["supervised"].item() * self.conf.minimum_continuity_relative_weight
+            supervised_value_lb = loss_dict["supervised"].item() * self.conf.get("minimum_continuity_relative_weight", 0)
             
             tmp = loss_dict.get("continuity", None)
             if tmp is not None and tmp != 0 and tmp < supervised_value_lb:
                     loss_dict[k] = (supervised_value_lb) * tmp / tmp.item()
 
-            supervised_value_lb = loss_dict["supervised"].item() * self.conf.minimum_momentum_relative_weight
-            supervised_value_ub = loss_dict["supervised"].item() * self.conf.maximum_momentum_relative_weight
+            supervised_value_lb = loss_dict["supervised"].item() * self.conf.get("minimum_momentum_relative_weight", 0)
+            supervised_value_ub = loss_dict["supervised"].item() * self.conf.get("maximum_momentum_relative_weight", 1e20)
 
             for k in ["momentum_x", "momentum_y"]:
                 tmp = loss_dict.get(k, None)

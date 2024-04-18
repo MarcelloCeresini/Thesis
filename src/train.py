@@ -105,7 +105,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
             for i in range(len(batch)):
                 data = batch[i]
                 
-                if conf.DEBUG_BYPASS_MODEL:
+                if conf.get("DEBUG_BYPASS_MODEL", False):
                     UserWarning("YOU ARE NOT USING PREDICTIONS TO COMPUTE AERO METRICS")
                     pred = (labels, pred[1], 
                         tuple(normalize_label(data.y_additional[data.index_boundary_sampled, i].view(-1) , "x-velocity", conf)

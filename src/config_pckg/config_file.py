@@ -54,7 +54,7 @@ class Config():
         self.standard_dataset_dir = os.path.join(self.DATA_DIR, "dataset_files")
         self.test_imgs_comparisons = os.path.join(self.DATA_DIR, "test_imgs_comparisons")
         self.test_htmls_comparisons = os.path.join(self.DATA_DIR, "test_htmls_comparisons")
-        self.test_vtksz_comparisons = os.path.join(self.DATA_DIR, "test_vtksz_comparisons")
+        self.test_vtk_comparisons = os.path.join(self.DATA_DIR, "test_vtk_comparisons")
 
         self.problematic_files = {"2dtc_002R074_001_s01"}
 
@@ -299,6 +299,8 @@ class Config():
         self.PINN_mode: Literal["supervised_only", "supervised_with_sampling", "continuity_only", "full_laminar", "turbulent_kw"] \
             = "turbulent_kw"
         
+        self.bool_algebraic_continuity = True
+        
         self.output_turbulence: bool = True
         if self.PINN_mode == "turbulent_kw" and not self.output_turbulence:
             print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
@@ -345,14 +347,15 @@ class Config():
         
         self.n_sampled_new_edges = 3
 
-        self.residual_loss: Literal["MAE", "MSE"] = "MSE"
+        self.residual_loss: Literal["MSE", "MAE"] = "MSE"
 
         self.standard_weights = {
             "supervised": 1,
             "supervised_on_sampled": 1,
             "boundary": 15,
             "continuity": 10,
-            "momentum_x": 3,
+            "momentum_x": 1,
+            "algebraic_continuity": 10
         }
         self.standard_weights["momentum_y"] = self.standard_weights["momentum_x"]
 
@@ -364,6 +367,7 @@ class Config():
             })
 
         self.normalize_denormalized_loss_components = True
+        # these weights are wrt the supervised part
         self.minimum_continuity_relative_weight = 0.01
         self.minimum_momentum_relative_weight = 0.01
         self.maximum_momentum_relative_weight = 0.5

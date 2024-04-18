@@ -72,7 +72,7 @@ def relative_error(pred: torch.Tensor, label: np.ndarray):
 if __name__ == "__main__":
     conf = Config()
 
-    df = pd.read_csv(os.path.join(conf.DATA_DIR, "parsed_files.csv"), index_col=1)
+    # df = pd.read_csv(os.path.join(conf.DATA_DIR, "parsed_files.csv"), index_col=1)
     #################### convert all
     input_filepaths = glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MSH, "*.msh"))
     input_filenames = [p.split(os.sep)[-1].removesuffix("_ascii.msh") for p in input_filepaths]
@@ -82,11 +82,11 @@ if __name__ == "__main__":
     meshComplete_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_MESHCOMPLETE_W_LABELS, "*.pkl")))
     graph_paths = sorted(glob.glob(os.path.join(conf.EXTERNAL_FOLDER_GRAPHS, "*.pt")))
     
-    df_errors = pd.DataFrame({}, columns=[
-        "last_iter",
-        "cd_main_pressure", "cl_main_pressure", "cd_main_total", "cl_main_total",
-        "cd_tyre_pressure", "cl_tyre_pressure", "cd_tyre_total", "cl_tyre_total"
-    ])
+    # df_errors = pd.DataFrame({}, columns=[
+    #     "last_iter",
+    #     "cd_main_pressure", "cl_main_pressure", "cd_main_total", "cl_main_total",
+    #     "cd_tyre_pressure", "cl_tyre_pressure", "cd_tyre_total", "cl_tyre_total"
+    # ])
 
     for i, (path_msh, name, path_m, path_g) in tqdm(enumerate(zip(
         acceptable_input_filepaths, acceptable_input_filenames, meshComplete_paths, graph_paths)), 
@@ -94,10 +94,11 @@ if __name__ == "__main__":
 
         assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
 
-        name_df_entry = name.removeprefix("2dtc_").removesuffix("_001_s01")
-        coeffs = df[df.index == name_df_entry]
+        # name_df_entry = name.removeprefix("2dtc_").removesuffix("_001_s01")
+        # coeffs = df[df.index == name_df_entry]
 
-        if coeffs.shape[0] != 0:
+
+        # if coeffs.shape[0] != 0:
         # meshCI_new = convert_msh_to_mesh_complete_info_obj(conf, path_msh, compute_radial_attributes=False)
         # meshCI_new.add_labels(os.path.join(conf.EXTERNAL_FOLDER_CSV, name+"_cell_values_at300.csv"))
         # meshCI_new.save_to_disk(path_m)
@@ -110,26 +111,25 @@ if __name__ == "__main__":
         
         # data = convert_mesh_complete_info_obj_to_graph(conf, meshCI_new, filename_output_graph=path_g)
         
-            data = copy.copy(torch.load(path_g))
-            cd_main_pressure, cl_main_pressure = data.components_coefficients["main_flap"][0]
-            cd_tyre_pressure, cl_tyre_pressure = data.components_coefficients["tyre"][0]
-            # relative_error_wrt_p = 
-            cd_main_total, cl_main_total = sum(data.components_coefficients["main_flap"])
-            cd_tyre_total, cl_tyre_total = sum(data.components_coefficients["tyre"])
+        #     cd_main_pressure, cl_main_pressure = data.components_coefficients["main_flap"][0]
+        #     cd_tyre_pressure, cl_tyre_pressure = data.components_coefficients["tyre"][0]
+        #     # relative_error_wrt_p = 
+        #     cd_main_total, cl_main_total = sum(data.components_coefficients["main_flap"])
+        #     cd_tyre_total, cl_tyre_total = sum(data.components_coefficients["tyre"])
 
-            df_errors.loc[len(df_errors.index)] = [
-                coeffs["last_iter"].values[0],
-                relative_error(cd_main_pressure, coeffs["main_cd"]),
-                relative_error(cl_main_pressure, coeffs["main_cl"]),
-                relative_error(cd_main_total, coeffs["main_cd"]),
-                relative_error(cl_main_total, coeffs["main_cl"]),
-                relative_error(cd_tyre_pressure, coeffs["tyre_cd"]),
-                relative_error(cl_tyre_pressure, coeffs["tyre_cl"]),
-                relative_error(cd_tyre_total, coeffs["tyre_cd"]),
-                relative_error(cl_tyre_total, coeffs["tyre_cl"]),
-                ]
-        else:
-            print("No history found")
+        #     df_errors.loc[len(df_errors.index)] = [
+        #         coeffs["last_iter"].values[0],
+        #         relative_error(cd_main_pressure, coeffs["main_cd"]),
+        #         relative_error(cl_main_pressure, coeffs["main_cl"]),
+        #         relative_error(cd_main_total, coeffs["main_cd"]),
+        #         relative_error(cl_main_total, coeffs["main_cl"]),
+        #         relative_error(cd_tyre_pressure, coeffs["tyre_cd"]),
+        #         relative_error(cl_tyre_pressure, coeffs["tyre_cl"]),
+        #         relative_error(cd_tyre_total, coeffs["tyre_cd"]),
+        #         relative_error(cl_tyre_total, coeffs["tyre_cl"]),
+        #         ]
+        # else:
+        #     print("No history found")
 
 
         # relative_error_wrt_p = 
@@ -139,8 +139,15 @@ if __name__ == "__main__":
         # data.components_coefficients = get_coefficients(conf, data, pressure_values=data.y[:,2],
         #     velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
         # pass
-        # torch.save(data, path_g)
-    df_errors.to_csv(os.path.join(conf.DATA_DIR, "relative_errors.csv"))
+        data = copy.copy(torch.load(path_g))
+        tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
+        data.faces_in_cell = torch.nn.utils.rnn.pad_sequence(
+            tmp, 
+            padding_value=-1
+        ).T
+        # data.n_cells = data.len_faces.shape[0]
+        torch.save(data, path_g)
+    # df_errors.to_csv(os.path.join(conf.DATA_DIR, "relative_errors.csv"))
 
     print("REMEMBER TO COPY IT TO THE PC FOLDER")
 

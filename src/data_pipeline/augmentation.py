@@ -8,20 +8,25 @@ import wandb
 from utils import normalize_label
 
 class NormalizeLabels(BaseTransform):
-    def __init__(self, conf) -> None:
+    def __init__(self, labels_to_keep_for_training, label_normalization_mode, dict_labels_train, air_speed, Q) -> None:
         super().__init__()
-        self.conf = conf
+        self.labels_to_keep_for_training = labels_to_keep_for_training
+        self.label_normalization_mode = label_normalization_mode
+        self.dict_labels_train = dict_labels_train
+        self.air_speed = air_speed
+        self.Q = Q
 
     def forward(self, data: torch.Any) -> torch.Any:
-        for i, (values, label) in enumerate(zip(data.y.T, self.conf.labels_to_keep_for_training)):
-            data.y[:,i] = normalize_label(values, label, self.conf)
+        for i, (values, label) in enumerate(zip(data.y.T, self.labels_to_keep_for_training)):
+            data.y[:,i] = normalize_label(values, label, 
+                self.label_normalization_mode, self.dict_labels_train, self.air_speed, self.Q)
         return data
 
 
 class RemoveRadialAttributes(BaseTransform):
-    def __init__(self, conf) -> None:
+    def __init__(self, n_radial_attributes) -> None:
         super().__init__()
-        self.n_radial_attributes = conf["n_radial_attributes"]
+        self.n_radial_attributes = n_radial_attributes
 
     def forward(self, data: torch.Any) -> torch.Any:
         data.x = data.x[:,:-self.n_radial_attributes]
@@ -33,12 +38,12 @@ class RemoveTurbulentLabels(BaseTransform):
         return data
 
 class SampleDomainPoints(BaseTransform):
-    def __init__(self, conf, test=False) -> None:
+    def __init__(self, domain_sampling, general_sampling, num_labels, n_sampled_new_edges, test=False) -> None:
         super().__init__()
-        self.domain_sampling = conf["domain_sampling"]
-        self.general_sampling = conf["general_sampling"]
-        self.num_labels = conf["output_dim"]
-        self.n_sampled_new_edges = conf["n_sampled_new_edges"]
+        self.domain_sampling = domain_sampling
+        self.general_sampling = general_sampling
+        self.num_labels = num_labels
+        self.n_sampled_new_edges = n_sampled_new_edges
         self.test=test
 
     def get_random_position_in_simplex(self, spatial_positions):
@@ -179,10 +184,10 @@ class SampleDomainPoints(BaseTransform):
 
 
 class SampleBoundaryPoints(BaseTransform):
-    def __init__(self, conf, test=False) -> None:
+    def __init__(self, boundary_sampling, graph_node_feature_dict, test=False) -> None:
         super().__init__()
-        self.boundary_sampling = conf["boundary_sampling"]
-        self.feat_dict = conf["graph_node_feature_dict"]
+        self.boundary_sampling = boundary_sampling
+        self.feat_dict = graph_node_feature_dict
         self.test = test
 
     def get_random_position_on_face(self, x, pos):
