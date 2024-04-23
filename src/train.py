@@ -73,7 +73,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
         total_loss_dict_reweighted = {}
 
         model.eval()
-        for batch in loader:
+        for batch in tqdm(loader, leave=False, desc="In test", position=1):
             batch.to(device, non_blocking=True)
             pred = model(**get_input_to_model(batch))
             labels = clean_labels(batch, model.conf)
