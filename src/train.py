@@ -77,7 +77,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
             batch.to(device, non_blocking=True)
             pred = model(**get_input_to_model(batch))
             labels = clean_labels(batch, model.conf)
-            loss = model.loss(pred, labels, data=batch)
+            loss = model.loss(pred, labels, batch=batch)
 
             if isinstance(loss, tuple):
                 standard_loss = loss[0]
@@ -250,7 +250,29 @@ def train(
                     loss = sum(loss_dict[k] for k in loss_dict)
             
             loss.backward()
-            torch.nn.utils.clip_grad_value_(model.parameters(), clip_value=conf.gradient_clip_value, foreach=True)
+
+            grads = torch.cat([
+                param.grad.detach().flatten()
+                for param in model.parameters()
+                if param.grad is not None
+            ])
+
+            max_grad = grads.max()
+            almost_max_grad = grads.mean() + 3*grads.std()
+
+            almost_max_grad = min(almost_max_grad, max_grad)
+
+            if (surplus :=(almost_max_grad*opt.param_groups[0]["lr"] / conf.maximum_grad_value) )> 1:
+                grad_norm = grads.norm()
+                wanted_grad_norm = grad_norm / surplus
+            else:
+                wanted_grad_norm = conf.gradient_clip_value_norm
+
+            torch.nn.utils.clip_grad_norm_(
+                parameters=model.parameters(), 
+                max_norm=min(conf.gradient_clip_value_norm, wanted_grad_norm),
+                foreach=True)
+            
             opt.step()
             batch.cpu()
 

@@ -343,7 +343,6 @@ class EPD_with_sampling(nn.Module):
             "pos":          pos,
             "batch":        batch,
         }
-        # edge_attr is 3d relative distance between nodes + the norm (4 columns)
 
         if self.use_fourier_features:
             input_fourier_features = \
@@ -447,7 +446,7 @@ class EPD_with_sampling(nn.Module):
                     else:
                         correct_x_graph = torch.FloatTensor(device=x.device)
 
-                    if self.add_global_info_new_edges:
+                    if self.add_BC_info_new_edges:
                         correct_x_BC = X["x_BC"].index_select(0, batch_sampling_points.view(1)).view(-1)
                     else:
                         correct_x_BC = torch.FloatTensor(device=x.device)
@@ -482,12 +481,13 @@ class EPD_with_sampling(nn.Module):
         else:
             return decoded["x"]
 
-    def loss(self, pred:torch.Tensor, label:torch.Tensor, ptr:Optional[torch.Tensor]=None):
+
+    def loss(self, pred: torch.Tensor, label: torch.Tensor, ptr: Optional[torch.Tensor]=None):
         if ptr is None:
             return self.loss_fn(pred, label)
         else:
             return sum([self.loss_fn(pred[ptr[i]:ptr[i+1]], label[ptr[i]:ptr[i+1]]) 
-                                for i in range( ptr.shape[0]-1)])
+                                for i in range(ptr.shape[0]-1)])
 
 
 class PINN(nn.Module):
@@ -597,6 +597,7 @@ class PINN(nn.Module):
             n_domain_points = domain_sampling_points.shape[0]
             
             new_edges = kwargs.get("new_edges_index", None).T
+            # needed for graph average --> each point is summed with its graph avg latent vector inside the model
             batch_domain_nodes = torch.cat([torch.full((1, num_domain_sampling_points[i]), i).view(-1) 
                 for i in torch.arange(num_domain_sampling_points.shape[0])])
         else:
@@ -611,6 +612,7 @@ class PINN(nn.Module):
 
             boundary_sampling_points = torch.autograd.Variable(kwargs["boundary_sampling_points"], requires_grad=True)
             n_boundary_points = boundary_sampling_points.shape[0]
+            # needed for graph average --> each point is summed with its graph avg latent vector inside the model
             batch_boundary_nodes = torch.cat([torch.full((1, num_boundary_sampling_points[i]), i).view(-1) 
                 for i in torch.arange(num_boundary_sampling_points.shape[0])])
             # additional_boundary = kwargs["x_additional_boundary"]
@@ -766,7 +768,6 @@ class PINN(nn.Module):
             domain_slice = torch.arange(n_domain_points)
             boundary_slice = torch.arange(start=n_domain_points, end=n_domain_points+n_boundary_points)
             
-
             ####################################################################################
             hess_samp, grads_samp, out_samp, out_sup = vmap(
                 compute_second_derivative, out_dims=(0,0,0,None), randomness="different")(
@@ -783,6 +784,7 @@ class PINN(nn.Module):
             if (tmp := torch.isnan(out_sup).sum()) > 0:
                 print(f"out_sup - {tmp} NaNs")
 
+            # for both domain and boundary residuals, batch is not important because it's a node-wise calculation
             residuals.update(get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp))
             
             boundary_residuals, velocity_derivatives_at_B = get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp)
@@ -862,10 +864,10 @@ class PINN(nn.Module):
         return self.conf.air_density*(algebraic_continuity_x+algebraic_continuity_y)
 
 
-    def loss(self, pred:torch.Tensor, label:torch.Tensor, data: pyg_data.Data|pyg_data.Batch):
+    def loss(self, pred:torch.Tensor, label:torch.Tensor, batch: pyg_data.Data|pyg_data.Batch):
 
         out_supervised, residuals = pred[0], pred[1]
-        batch_size = data.batch_size
+        batch_size = batch.batch_size
         assert isinstance(out_supervised, torch.Tensor)
         assert isinstance(residuals, dict)
         assert out_supervised.shape[0] == label.shape[0], f"Dimensions do not match: out_supervised.shape[0] = {out_supervised.shape[0]} \
@@ -877,23 +879,23 @@ class PINN(nn.Module):
         if output_sampled_domain is not None:
             device = output_sampled_domain.device
 
-            idxs =  data.new_edges_not_shifted.T[0,:] # idxs of sampling points (for each batch between 0 and data.num_domain_sampling_points)
-            num_sampled = data.num_domain_sampling_points
+            idxs =  batch.new_edges_not_shifted.T[0,:] # idxs of sampling points (for each batch between 0 and data.num_domain_sampling_points)
+            num_sampled = batch.num_domain_sampling_points
             ptr_num_sampled = torch.tensor([num_sampled[:i].sum() for i in range(num_sampled.shape[0]+1)])
             
-            faces = data.new_edges_not_shifted.T[1,:] # idxs of normal points (for each batch between 0 and data.ptr[i])
-            num_new_edges_not_shifted = data.num_new_edges_not_shifted
+            faces = batch.new_edges_not_shifted.T[1,:] # idxs of faces to which sampled points are connected to (for each batch between 0 and data.ptr[i])
+            num_new_edges_not_shifted = batch.num_new_edges_not_shifted
             ptr_new_edges_not_shifted = torch.tensor([num_new_edges_not_shifted[:i].sum() for i in range(num_new_edges_not_shifted.shape[0]+1)])
             
             for i in range(batch_size):
-                # idxs[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] += data.num ??
                 idxs[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] += ptr_num_sampled[i]
-                faces[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] += data.ptr[i]
+                faces[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] += batch.ptr[i]
 
             n = output_sampled_domain.shape[0]
             assert idxs.max()+1 == n, "Something wrong"
 
-            distance_weighted_label = label[faces]*data.new_edges_weights.view(-1,1)
+            # new_edges_weights is 1/norm_of(face_position - sampled_point_position)
+            distance_weighted_label = label[faces]*batch.new_edges_weights.view(-1,1)
 
             if (tmp := torch.isnan(distance_weighted_label).sum()) > 0:
                 print(f"distance_weighted_label (in loss) - {tmp} NaNs")
@@ -911,7 +913,7 @@ class PINN(nn.Module):
                 w_turb = torch.ones(n, device=device, 
                     dtype=distance_weighted_label.dtype).scatter_reduce_(0, idxs, distance_weighted_label[:,4], "sum", include_self=False)
 
-            normalization_const = torch.zeros(n, device=device).scatter_reduce_(0, idxs, data.new_edges_weights, "sum", include_self=False)
+            normalization_const = torch.zeros(n, device=device).scatter_reduce_(0, idxs, batch.new_edges_weights, "sum", include_self=False)
 
             if (tmp := torch.isnan(normalization_const).sum()) > 0:
                 print(f"normalization_const (in loss) - {tmp} NaNs")
@@ -936,7 +938,7 @@ class PINN(nn.Module):
         
         ### CAN CHOOSE TO ONLY SUPERVISE IN SAMPLED POINTS (but then you have no supervision on mesh points,
         ###     so it doesn't work very well)
-        loss_dict.update({"supervised": self.net.loss(out_supervised, label, ptr=data.ptr)})
+        loss_dict.update({"supervised": self.net.loss(out_supervised, label, ptr=batch.ptr)})
         # else:
         #     loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
 
@@ -945,45 +947,45 @@ class PINN(nn.Module):
             loss_fn_LOGGING = lambda x: x.abs().mean()
             sample_loss_dict = {}
             sample_optional_values = {}
+            components = set(self.conf.graph_node_features_not_for_training).difference([
+                                "component_id", "is_car", "is_flap", "is_tyre"])
             for k in sample_residuals:
                 if "debug_only_" in k:
                     with torch.no_grad():
                         k_to_log = k.removeprefix("debug_only_")
                         tmp = loss_fn_LOGGING(sample_residuals[k][sample_residuals[k].nonzero()])
                         sample_optional_values[k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
-                        tmp_dict = {}
-                        for comp in set(self.conf.graph_node_features_not_for_training).difference([
-                                "component_id", "is_car", "is_flap", "is_tyre"]):
+                        for comp in components:
                             correct_idxs = additional_boundary[:,self.conf.graph_node_features_not_for_training[comp]] == 1
                             tmp = loss_fn_LOGGING(sample_residuals[k][correct_idxs])
                             
                             sample_optional_values[comp+"_"+k_to_log] = tmp if not tmp.isnan() \
                                 else torch.tensor(0., device=additional_boundary.device)
 
-                            tmp_dict[k_to_log] = sample_optional_values[comp+"_"+k_to_log]
-                        sample_optional_values[comp+"_total"] = sum(tmp_dict.values())
+                            sample_optional_values[comp+"_total"] = sample_optional_values.get(comp+"_total",0.) + \
+                                                                        sample_optional_values[comp+"_"+k_to_log]
                 else:
                     sample_loss_dict[k] = loss_fn(residuals[k])
             return sample_loss_dict, sample_optional_values
 
         flag_boundary = residuals.get("boundary", None)
         if flag_boundary is not None:
-            num_sampled_BC = data.num_boundary_sampling_points
+            num_sampled_BC = batch.num_boundary_sampling_points
             ptr_num_sampled_BC = torch.tensor([num_sampled_BC[:i].sum() for i in range(num_sampled_BC.shape[0]+1)])
 
         if self.conf.get("bool_algebraic_continuity", False):
-            ptr_cells = torch.tensor([data.n_cells[:i].sum() for i in range(data.n_cells.shape[0]+1)])
+            ptr_cells = torch.tensor([batch.n_cells[:i].sum() for i in range(batch.n_cells.shape[0]+1)])
 
         optional_values = {}
         sample_residuals = {}
-        x_additional_boundary = getattr(data, "x_additional_boundary", None)
+        x_additional_boundary = getattr(batch, "x_additional_boundary", None)
         for i in range(batch_size):
             for k in residuals:
                 # [data.ptr[i]:data.ptr[i+1]]
                 if k in ["continuity", "momentum_x", "momentum_y"]: # domain sampling
                     sample_residuals[k] = residuals[k][ptr_num_sampled[i]:ptr_num_sampled[i+1]]
                 elif k == "algebraic_continuity":
-                    sample_residuals[k] = residuals[k][ptr_cells[i]:ptr_cells[i+i]]
+                    sample_residuals[k] = residuals[k][ptr_cells[i]:ptr_cells[i+1]]
                 else: # boundary sampling
                     sample_residuals[k] = residuals[k][ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]]
             
@@ -991,13 +993,14 @@ class PINN(nn.Module):
                 x_additional_boundary_sliced = x_additional_boundary[ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]]
             else:
                 x_additional_boundary_sliced = None
+            
             sample_loss_dict, sample_optional_values = get_values_per_sample(
                 sample_residuals, x_additional_boundary_sliced)
             
             for k in sample_loss_dict:
-                loss_dict[k] = loss_dict.get(k,0) + sample_loss_dict[k]
+                loss_dict[k] = loss_dict.get(k,0.) + sample_loss_dict[k]
             for k in sample_optional_values:
-                optional_values[k] = optional_values.get(k,0) + sample_optional_values[k]
+                optional_values[k] = optional_values.get(k,0.) + sample_optional_values[k]
 
         loss_dict = {k:v/batch_size for k,v in loss_dict.items()}
         optional_values = {k:v/batch_size for k,v in optional_values.items()}

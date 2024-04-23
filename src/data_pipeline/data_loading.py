@@ -67,7 +67,8 @@ def get_data_loaders(conf):
                             shuffle=True, 
                             num_workers=n_workers_train, 
                             persistent_workers=n_workers_train>0,
-                            pin_memory=True
+                            pin_memory=True,
+                            pin_memory_device=conf.device,
                             )
     val_dataloader  = DataLoader(dataset_val, 
                             batch_size=1, 
@@ -75,6 +76,7 @@ def get_data_loaders(conf):
                             num_workers=2,
                             persistent_workers=True, 
                             pin_memory=True, 
+                            pin_memory_device=conf.device,
                             )
     test_dataloader = DataLoader(dataset_test, batch_size=1, shuffle=False)
     train_dataloader_for_metrics = DataLoader(dataset_train_for_metrics, batch_size=1, shuffle=False)
