@@ -209,6 +209,7 @@ def train(
         total_loss_dict = {}
         total_optional_values = {}
         total_loss_dict_reweighted = {}
+        grad_logging = {}
 
         model.train()
         for batch in tqdm(train_loader, leave=False, desc="Batch in epoch", position=1):
@@ -268,6 +269,11 @@ def train(
             else:
                 wanted_grad_norm = conf.gradient_clip_value_norm
 
+            grad_logging["max_grad"] = grad_logging.get("max_grad", 0.) + max_grad*batch.num_graphs
+            grad_logging["almost_max_grad"] = grad_logging.get("almost_max_grad", 0.) + almost_max_grad*batch.num_graphs
+            grad_logging["surplus"] = grad_logging.get("surplus", 0.) + surplus*batch.num_graphs
+            grad_logging["actual_grad"] = grad_logging.get("actual_grad", 0.) + min(conf.gradient_clip_value_norm, wanted_grad_norm, grads.norm())*batch.num_graphs
+
             torch.nn.utils.clip_grad_norm_(
                 parameters=model.parameters(), 
                 max_norm=min(conf.gradient_clip_value_norm, wanted_grad_norm),
@@ -295,6 +301,7 @@ def train(
         total_loss /= len(train_loader.dataset)
         for k in total_loss_dict: total_loss_dict[k] /= len(train_loader.dataset)
         for k in total_optional_values: total_optional_values[k] /= len(train_loader.dataset)
+        for k in grad_logging: grad_logging[k] /= len(train_loader.dataset)
 
         log_dict = {
             "standard_loss": standard_loss,
@@ -306,6 +313,7 @@ def train(
         }
         log_dict.update(total_loss_dict)
         log_dict.update(total_optional_values)
+        log_dict.update(grad_logging)
 
         wandb.log(log_dict, epoch)
         
