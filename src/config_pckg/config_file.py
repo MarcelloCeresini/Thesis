@@ -300,11 +300,11 @@ class Config():
             self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)
 
         self.PINN_mode: Literal["supervised_only", "supervised_with_sampling", "continuity_only", "full_laminar", "turbulent_kw"] \
-            = "supervised_only"
+            = "turbulent_kw"
         
-        self.bool_algebraic_continuity = False
+        self.bool_algebraic_continuity = True
         
-        self.output_turbulence: bool = False
+        self.output_turbulence: bool = True
         if self.PINN_mode == "turbulent_kw" and not self.output_turbulence:
             print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
             self.output_turbulence = True
@@ -328,7 +328,7 @@ class Config():
         self.bool_bootstrap_bias = True
         self.bootstrap_bias = {k:self.dict_labels_train["mean"][k] for k in self.labels_to_keep_for_training}
 
-        self.flag_BC_PINN: bool = False
+        self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] \
             = "new_edges"
         self.graph_sampling_p_for_interpolation = 0.01
@@ -355,10 +355,10 @@ class Config():
         self.standard_weights = {
             "supervised": 1,
             "supervised_on_sampled": 1,
-            "boundary": 15,
-            "continuity": 10,
+            "boundary": 10,
+            "continuity": 1000,
             "momentum_x": 1,
-            "algebraic_continuity": 10
+            "algebraic_continuity": 10000
         }
         self.standard_weights["momentum_y"] = self.standard_weights["momentum_x"]
 
@@ -369,7 +369,7 @@ class Config():
                 "negative_w": 1,
             })
 
-        self.normalize_denormalized_loss_components = True
+        self.normalize_denormalized_loss_components = False
         # these weights are wrt the supervised part
         self.minimum_continuity_relative_weight = 0.01
         self.minimum_momentum_relative_weight = 0.01
@@ -382,6 +382,8 @@ class Config():
         self.gamma_loss = 10
 
         self.gradient_clip_value = 1
+        self.gradient_clip_value_norm = 5 # ~ initial norm in a training
+        self.maximum_grad_value = 0.01 # after lr
 
         self.logging = {
             "model_log_mode": "all",

@@ -70,15 +70,9 @@ def get_data_loaders(conf):
                             pin_memory=True,
                             pin_memory_device=conf.device,
                             )
-    val_dataloader  = DataLoader(dataset_val, 
-                            batch_size=1, 
-                            shuffle=False,
-                            num_workers=2,
-                            persistent_workers=True, 
-                            pin_memory=True, 
-                            pin_memory_device=conf.device,
-                            )
-    test_dataloader = DataLoader(dataset_test, batch_size=1, shuffle=False)
+    n_workers_val=conf["hyper_params"]["val"]["n_workers_dataloaders"]
+    val_dataloader  = DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=n_workers_val,)
+    test_dataloader = DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=n_workers_val,)
     train_dataloader_for_metrics = DataLoader(dataset_train_for_metrics, batch_size=1, shuffle=False)
 
     return train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics

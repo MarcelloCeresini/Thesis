@@ -269,10 +269,12 @@ def train(
             else:
                 wanted_grad_norm = conf.gradient_clip_value_norm
 
+            grad_norm = grads.norm()
             grad_logging["max_grad"] = grad_logging.get("max_grad", 0.) + max_grad*batch.num_graphs
             grad_logging["almost_max_grad"] = grad_logging.get("almost_max_grad", 0.) + almost_max_grad*batch.num_graphs
             grad_logging["surplus"] = grad_logging.get("surplus", 0.) + surplus*batch.num_graphs
-            grad_logging["actual_grad"] = grad_logging.get("actual_grad", 0.) + min(conf.gradient_clip_value_norm, wanted_grad_norm, grads.norm())*batch.num_graphs
+            grad_logging["grad_norm"] = grad_logging.get("grad_norm", 0.) + grad_norm*batch.num_graphs
+            grad_logging["actual_grad_norm"] = grad_logging.get("actual_grad_norm", 0.) + min(conf.gradient_clip_value_norm, wanted_grad_norm, grad_norm)*batch.num_graphs
 
             torch.nn.utils.clip_grad_norm_(
                 parameters=model.parameters(), 
@@ -322,6 +324,8 @@ def train(
         
         # torch.cuda.empty_cache()
         if epoch % conf["hyper_params"]["val"]["n_epochs_val"] == 0:
+            # clean gpu for validation (we want to fill it up only for training)
+            torch.cuda.empty_cache()
             val_loss, metric_results = test(val_loader, model, conf, loss_weights)
             torch.cuda.empty_cache()
 
@@ -344,7 +348,10 @@ def train(
             wandb.log({"best_metric": scheduler.best}, epoch)
             wandb.log({f"val_{k}":v for k,v in metric_results.items()}, epoch)
 
+            # clean gpu for validation (we want to fill it up only for training)
+            torch.cuda.empty_cache()
             train_standard_loss, train_metric_results = test(dataloader_train_for_metrics, model, conf, loss_weights)
+            torch.cuda.empty_cache()
             train_standard_metric = sum([metric_results["MAE"][k] for k in conf.physical_labels])
 
             wandb.log({"train_standard_loss": train_standard_loss}, epoch)

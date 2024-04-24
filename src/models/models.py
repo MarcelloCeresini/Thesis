@@ -820,7 +820,7 @@ class PINN(nn.Module):
                 out_sup[:,0],    # all_u
                 out_sup[:,1])    # all_v
 
-            residuals.update({"algebraic_continuity":algebraic_continuity})
+            residuals.update({"algebraic_continuity":algebraic_continuity}) # one value (positive/negative) per cell
         
         return out_sup, residuals, velocity_derivatives_at_B
 
