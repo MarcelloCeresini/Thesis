@@ -16,7 +16,7 @@ from wandb_osh.hooks import TriggerWandbSyncHook
 from config_pckg.config_file import Config
 from data_pipeline.data_loading import get_data_loaders
 from train import train, test
-from utils import plot_gt_pred_label_comparison, print_memory_state_gpu, \
+from utils import clean_labels, plot_gt_pred_label_comparison, print_memory_state_gpu, \
     get_input_to_model, init_wandb, plot_test_images_from_model, TriggerWandbSyncHookForWindows
 from models.models import get_model_instance
 
@@ -80,14 +80,20 @@ if __name__ == "__main__":
     print_w_time("WRITING GRAPH SUMMARY")
     for batch in val_dataloader:
         batch.to(conf["device"])
+        pred = model(**get_input_to_model(batch))
+        labels = clean_labels(batch, model.conf)
+        loss = model.loss(pred, labels, batch)
         break
 
+    loss_dict = loss[1]
+    loss_keys_map = {i:k for i, k in enumerate(loss_dict)}
+    
     ###################################################################################################
     # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
     # print(model_summary)
 
     print_w_time("TRAINING")
-    model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name, trigger_sync=trigger_sync)
+    model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name, trigger_sync=trigger_sync, loss_keys_map=loss_keys_map)
 
     print_w_time("SAVING MODEL")
     if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_runs")):

@@ -1846,3 +1846,12 @@ class TriggerWandbSyncHookForWindows(TriggerWandbSyncHook):
         command_file.touch(exist_ok=True)
         command_file.write_text(windows_absolute_trial_path.as_posix())
         logger.debug("Wrote command file %s", command_file)
+
+def clean_labels(batch, conf: Config):
+    if hasattr(batch, "y_mask"):
+        if batch.y_mask is not None:
+            # FIXME: still no good support for masked tensors
+            labels = torch.masked.masked_tensor(batch.y, batch.y_mask)
+    else:
+        labels = batch.y
+    return labels[:,:conf["output_dim"]]

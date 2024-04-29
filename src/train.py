@@ -13,26 +13,16 @@ import torch_geometric.data as pyg_data
 from torch.optim import Adam
 import torch.optim.lr_scheduler as lr_scheduler 
 from torch.masked import masked_tensor
+from torch.func import functional_call, vmap, grad, grad_and_value
+
 from pandas import json_normalize
 import torchmetrics
 import wandb
 from wandb_osh.hooks import TriggerWandbSyncHook
 
-from utils import print_memory_state_gpu, get_input_to_model, get_coefficients, normalize_label
+from utils import print_memory_state_gpu, get_input_to_model, get_coefficients, normalize_label, clean_labels
 from config_pckg.config_file import Config 
 import loss_pckg
-
-
-
-def clean_labels(batch, conf: Config):
-    if hasattr(batch, "y_mask"):
-        if batch.y_mask is not None:
-            # FIXME: still no good support for masked tensors
-            labels = torch.masked.masked_tensor(batch.y, batch.y_mask)
-    else:
-        labels = batch.y
-    return labels[:,:conf["output_dim"]]
-
 
 def forward_metric_results(preds, labels, conf, metric_dict):
     for metric_obj_subdict in metric_dict.values():
@@ -164,6 +154,7 @@ def train(
         **kwargs):
     
     trigger_sync: Optional[TriggerWandbSyncHook] = kwargs.get("trigger_sync", None)
+    loss_keys_map: Optional[dict] = kwargs.get("loss_keys_map", None)
 
     if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_checkpoints")):
         os.mkdir(os.path.join(conf["DATA_DIR"], "model_checkpoints"))
@@ -220,6 +211,26 @@ def train(
             opt.zero_grad(set_to_none=True)
             
             batch.to(conf.device)
+
+            if conf.dynamic_loss_weights:
+
+                def compute_loss_key(params, buffers, batch, labels, loss_key_idx):
+
+                    pred = functional_call(model, (params, buffers), **get_input_to_model(batch))
+                    loss = model.loss(pred, labels, batch)
+                    return loss[loss_keys_map[loss_key_idx]], loss[loss_keys_map[loss_key_idx]]
+                
+                params = {k: v.detach() for k, v in model.named_parameters()}
+                buffers = {k: v.detach() for k, v in model.named_buffers()}
+                labels = clean_labels(batch, model.conf)
+
+                grads_and_loss = vmap(grad_and_value(compute_loss_key), in_dims=(None, None, None, None, 0))(
+                    params, buffers, batch, labels, torch.arange(len(loss_keys_map))
+                )
+
+                
+
+
             pred = model(**get_input_to_model(batch))
             labels = clean_labels(batch, model.conf)
             loss = model.loss(pred, labels, batch)
@@ -391,7 +402,7 @@ def train(
                 total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights[k]
             wandb.log({f"weight_{k}":v for k,v in loss_weights.items()}, epoch)
             wandb.log({f"reweighted_{k}":v for k,v in total_loss_dict_reweighted.items()}, epoch)
-            
+
             for k in loss_dict:
                 loss_weights_uncorrected[k] = \
                     (1-conf.lambda_dynamic_weights) * \
