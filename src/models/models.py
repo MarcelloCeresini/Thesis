@@ -806,6 +806,7 @@ class PINN(nn.Module):
                 (x, x_mask, edge_index, edge_attr, pos, batch),
             )
             velocity_derivatives_at_B = ()
+            domain_quantities = ()
 
         if self.conf.get("bool_algebraic_continuity", False):
             ptr_cells = torch.tensor([n_cells[:i].sum() for i in range(n_cells.shape[0]+1)])
