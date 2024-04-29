@@ -1,4 +1,5 @@
 from copy import deepcopy
+import copy
 import os
 from typing import Literal, Optional
 from tqdm import tqdm
@@ -91,7 +92,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                     total_optional_values[k] = total_optional_values.get(k,0) + \
                                             optional_values[k].item()*batch.num_graphs
                 if conf["dynamic_loss_weights"]:
-                    loss = sum(loss_dict[k]*loss_weights.get(k,1) for k in loss_dict)
+                    loss = sum(loss_dict[k]*loss_weights[k] for k in loss_dict)
                 else:
                     loss = sum(loss_dict[k] for k in loss_dict)
             
@@ -137,7 +138,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
         for k in total_optional_values: total_optional_values[k] /= len(loader.dataset)
         if conf["dynamic_loss_weights"]:
             for k in total_loss_dict: 
-                total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights.get(k,1)
+                total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights[k]
         
         metric_results = compute_metric_results(metric_dict, conf)
         metric_aero_dict = metric_aero.compute()
@@ -148,7 +149,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
         metric_results.update(metric_aero_dict)
         metric_results.update(total_loss_dict)
         metric_results.update(total_optional_values)
-        metric_results.update(total_loss_dict_reweighted)
+        metric_results.update({"reweighted":total_loss_dict_reweighted})
 
     return total_loss, metric_results
 
@@ -201,8 +202,9 @@ def train(
 
     best_epoch = 0
     # print_memory_state_gpu("Before training", conf)
-    loss_weights = {}
-    mean_grads = {}
+    loss_weights = {k:0. for k in conf.standard_weights} # init them as 0. needed for bias-correction
+    loss_weights_uncorrected = copy.copy(loss_weights)
+    counter_dynamic_loss = 0
 
     for epoch in tqdm(range(conf["hyper_params"]["training"]["n_epochs"]), desc="Epoch", position=0):
         total_loss = 0
@@ -210,9 +212,11 @@ def train(
         total_optional_values = {}
         total_loss_dict_reweighted = {}
         grad_logging = {}
+        grad_norm_dyn = {}
 
         model.train()
         for batch in tqdm(train_loader, leave=False, desc="Batch in epoch", position=1):
+            grads = {}
             opt.zero_grad(set_to_none=True)
             
             batch.to(conf.device)
@@ -238,19 +242,30 @@ def train(
                     assert conf.main_loss_component_dynamic in loss_dict, f"{conf.main_loss_component_dynamic} not in loss_dict keys: {list(loss_dict.keys())}"
                     for k in loss_dict:
                         loss_dict[k].backward(retain_graph=True)
+                        grads[k] = {}
                         # for param in model.named_parameters():
                         #     print(f"True - {param[0]}" if isinstance(param[1].grad, torch.Tensor) else f"False - {param[0]}")
-                        mean_grads[k] = mean_grads.get(k, 0) + \
-                                            torch.cat([param.grad.view(-1) for param in model.parameters() 
-                                                if isinstance(param.grad, torch.Tensor)]).abs().mean()
-                        opt.zero_grad()
-                    # TODO: could store grads and compute differences between them to avoid the last
-                    # backward pass with the total loss (because we are summing them)
-                    loss = sum(loss_dict[k]*loss_weights.get(k,1) for k in loss_dict)
+                        for name, param in model.named_parameters():
+                            if isinstance(param.grad, torch.Tensor):
+                                grads[k][name] = grads[k].get(name, 0) + param.grad
+                        opt.zero_grad(set_to_none=True)
+                        # mean_grads[k] = mean_grads.get(k, 0) + \
+                        #                     torch.cat([param.grad.view(-1) for param in model.parameters() 
+                        #                         if isinstance(param.grad, torch.Tensor)]).abs().mean()
+                        grad_norm_dyn[k] = grad_norm_dyn.get(k, 0) + torch.cat([v.view(-1) for v in grads[k].values()]).norm()
+                    
+                    for name, param in model.named_parameters():
+                        total_grad = sum([grads[k].get(name, 0)*loss_weights[k] for k in grads])
+                        if isinstance(total_grad, torch.Tensor):
+                            param.grad = total_grad
+
+                    loss = sum(loss_dict[k]*loss_weights[k] for k in loss_dict) # only for logging purposes, do not compute another backwards
+
                 else:
                     loss = sum(loss_dict[k] for k in loss_dict)
-            
-            loss.backward()
+                    loss.backward()
+            else:
+                loss.backward()
 
             grads = torch.cat([
                 param.grad.detach().flatten()
@@ -369,13 +384,26 @@ def train(
             model.load_state_dict(tmp["model_state_dict"])
             break
 
-        if conf.dynamic_loss_weights: 
+        if conf.dynamic_loss_weights:
+            counter_dynamic_loss += 1
+
             for k in total_loss_dict: 
-                total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights.get(k,1)
+                total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights[k]
             wandb.log({f"weight_{k}":v for k,v in loss_weights.items()}, epoch)
             wandb.log({f"reweighted_{k}":v for k,v in total_loss_dict_reweighted.items()}, epoch)
+            # TODO: add bias correction
             for k in loss_dict:
-                loss_weights[k] = (1-conf.lambda_dynamic_weights) * loss_weights.get(k, conf.standard_weights.get(k, 1)/conf.gamma_loss) + \
-                                    conf.lambda_dynamic_weights/conf.gamma_loss * (mean_grads[conf.main_loss_component_dynamic]/mean_grads[k])
+                loss_weights_uncorrected[k] = \
+                    (1-conf.lambda_dynamic_weights) * \
+                        loss_weights_uncorrected[k] + \
+                    conf.lambda_dynamic_weights     * \
+                        conf.standard_weights[k] * float((grad_norm_dyn[conf.main_loss_component_dynamic]/grad_norm_dyn[k]).cpu())
+            
+            for k in loss_dict: # bias correction
+                loss_weights[k] = loss_weights_uncorrected[k] / (1 - (1-conf.lambda_dynamic_weights)**counter_dynamic_loss)
+            
+            # print(loss_weights)
+                # leave "conf.standard_weights[k]" so that you can control the relative importance
+                # otherwise all the components would have the same importance (and you couldn't change that)
 
     return model
