@@ -1,5 +1,6 @@
 import os, glob
 
+import sys
 from typing import Any, Callable, Optional
 
 from torch_geometric.data.data import BaseData
@@ -16,7 +17,6 @@ from torch_geometric.data import Batch
 from data_pipeline.augmentation import SampleBoundaryPoints, SampleDomainPoints, \
         RemoveRadialAttributes, RemoveTurbulentLabels, NormalizeLabels
 
-
 class CfdDataset(InMemoryDataset):
     def __init__(self, split_idxs, root: str | None = None, transform: Callable[..., Any] | None = None, pre_transform: Callable[..., Any] | None = None, pre_filter: Callable[..., Any] | None = None, log: bool = True):
         super().__init__(root, transform, pre_transform, pre_filter, log)
@@ -32,6 +32,14 @@ class CfdDataset(InMemoryDataset):
 
 def get_data_loaders(conf):
 
+    gettrace = getattr(sys, 'gettrace', None)
+    if gettrace is not None:
+        if gettrace():
+            print('Hmm, Big Debugger is watching me --> no workers for loaders')
+            DEBUGGING = True
+        else:
+            DEBUGGING = False
+    
     transform_list_train = []
     transform_list_test = []
     general_transforms = []
@@ -61,7 +69,7 @@ def get_data_loaders(conf):
     dataset_test = CfdDataset(np.array(conf["split_idxs"]["test"]), root=conf["standard_dataset_dir"], transform=transforms_test)
     dataset_train_for_metrics = CfdDataset(np.array(conf["split_idxs"]["train"]), root=conf["standard_dataset_dir"], transform=transforms_test)
 
-    n_workers_train=conf["hyper_params"]["training"]["n_workers_dataloaders"]
+    n_workers_train=conf["hyper_params"]["training"]["n_workers_dataloaders"] if not DEBUGGING else 0
     train_dataloader = DataLoader(dataset_train, 
                             batch_size=conf["hyper_params"]["training"]["batch_size"],
                             shuffle=True, 
@@ -70,7 +78,7 @@ def get_data_loaders(conf):
                             pin_memory=True,
                             pin_memory_device=conf.device,
                             )
-    n_workers_val=conf["hyper_params"]["val"]["n_workers_dataloaders"]
+    n_workers_val=conf["hyper_params"]["val"]["n_workers_dataloaders"] if not DEBUGGING else 0
     val_dataloader  = DataLoader(dataset_val, batch_size=1, shuffle=False, num_workers=n_workers_val,)
     test_dataloader = DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=n_workers_val,)
     train_dataloader_for_metrics = DataLoader(dataset_train_for_metrics, batch_size=1, shuffle=False)
