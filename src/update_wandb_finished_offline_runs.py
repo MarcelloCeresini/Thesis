@@ -2,7 +2,7 @@ from typing import Union
 import wandb, pprint
 api = wandb.Api()
 
-run_id = ""
+run_id = "0az598nq"
 
 run = api.run(f"marcelloceresini/Thesis/{run_id}")
 summary = {}

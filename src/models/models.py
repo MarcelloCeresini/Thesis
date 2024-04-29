@@ -738,7 +738,9 @@ class PINN(nn.Module):
                 case _:
                     raise NotImplementedError(f"{self.conf['PINN_mode']} is not implemented yet")
             
-            return residuals
+            return residuals, (u, v, p, k, w, \
+                u_x, u_y, v_x, v_y, p_x, p_y, k_x, k_y, w_x, w_y, \
+                u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy)
 
 
         def get_boundary_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
@@ -785,7 +787,8 @@ class PINN(nn.Module):
                 print(f"out_sup - {tmp} NaNs")
 
             # for both domain and boundary residuals, batch is not important because it's a node-wise calculation
-            residuals.update(get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp))
+            domain_res, domain_quantities = get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp)
+            residuals.update(domain_res)
             
             boundary_residuals, velocity_derivatives_at_B = get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp)
             
@@ -822,7 +825,7 @@ class PINN(nn.Module):
 
             residuals.update({"algebraic_continuity":algebraic_continuity}) # one value (positive/negative) per cell
         
-        return out_sup, residuals, velocity_derivatives_at_B
+        return out_sup, residuals, velocity_derivatives_at_B, domain_quantities
 
 
     def compute_algebraic_continuity_for_one_cell(self,
@@ -867,6 +870,7 @@ class PINN(nn.Module):
     def loss(self, pred:torch.Tensor, label:torch.Tensor, batch: pyg_data.Data|pyg_data.Batch):
 
         out_supervised, residuals = pred[0], pred[1]
+        domain_quantities = pred[3]
         batch_size = batch.batch_size
         assert isinstance(out_supervised, torch.Tensor)
         assert isinstance(residuals, dict)
@@ -1004,6 +1008,18 @@ class PINN(nn.Module):
 
         loss_dict = {k:v/batch_size for k,v in loss_dict.items()}
         optional_values = {k:v/batch_size for k,v in optional_values.items()}
+
+        momentum_percentage = (loss_dict.get("momentum_x", 0.)+loss_dict.get("momentum_y", 0.)) / loss_dict["supervised"]
+        if momentum_percentage > 1:
+            with torch.no_grad:
+                u, v, p, k, w, \
+                    u_x, u_y, v_x, v_y, p_x, p_y, k_x, k_y, w_x, w_y, \
+                    u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy = domain_quantities
+                print((u*u_x).abs().max())
+                print((v*u_y).abs().max())
+                print((p_x/self.conf.air_density).abs().max())
+                print(((self.conf.air_kinematic_viscosity + k/w)*(u_xx + u_yy)).abs().max())
+                print((((k_x*w - k*w_x) * u_x + (k_y*w - k*w_y) * u_y) / w**2).abs().max())
 
         if self.conf.get("normalize_denormalized_loss_components", False):
             supervised_value_lb = loss_dict["supervised"].item() * self.conf.get("minimum_continuity_relative_weight", 0)

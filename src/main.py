@@ -26,108 +26,89 @@ def print_w_time(str):
 
 if __name__ == "__main__":
 
-        WANDB_MODE: Literal["online", "offline"] = "online"
+    WANDB_MODE: Literal["online", "offline"] = "online"
 
-        gettrace = getattr(sys, 'gettrace', None)
-        if gettrace is not None:
-            if gettrace():
-                print('Hmm, Big Debugger is watching me --> setting wandb to offline')
-                WANDB_MODE="offline"
-
-        platform = sys.platform
-        if platform == "linux" or platform == "linux2":
+    gettrace = getattr(sys, 'gettrace', None)
+    if gettrace is not None:
+        if gettrace():
+            print('Hmm, Big Debugger is watching me --> setting wandb to offline')
             WANDB_MODE="offline"
 
-        init_wandb(Config(), overwrite_WANDB_MODE=WANDB_MODE)
+    platform = sys.platform
+    if platform == "linux" or platform == "linux2":
+        WANDB_MODE="offline"
 
-        torch.cuda.empty_cache()
-        torch.autograd.set_detect_anomaly(True, True)
+    init_wandb(Config(), overwrite_WANDB_MODE=WANDB_MODE)
 
-        conf = wandb.config
-            
-        if platform == "linux" or platform == "linux2":
-            trigger_sync = TriggerWandbSyncHookForWindows(communication_dir=conf.wandb_communication_dir)
-        else:
-            trigger_sync = None
+    torch.cuda.empty_cache()
+    torch.autograd.set_detect_anomaly(True, True)
 
-        if conf.device == "cpu":
-            ResourceWarning("YOU ARE USING THE CPU")
+    conf = wandb.config
+        
+    if platform == "linux" or platform == "linux2":
+        trigger_sync = TriggerWandbSyncHookForWindows(communication_dir=conf.wandb_communication_dir)
+    else:
+        trigger_sync = None
 
-        print(f"Copy this to download logs --> {wandb.run.entity}/{wandb.run.project}/{wandb.run.id}")
-        print(f"LOCAL DIRECTORY NAME: {wandb.run.dir}")
-        print(f"LOCAL FILE NAME: run-{wandb.run.name}")
-        print("----------------------------------------------------")
+    if conf.device == "cpu":
+        ResourceWarning("YOU ARE USING THE CPU")
 
-        run_name = wandb.run.dir.split(os.sep)[-2]
-        pardir = os.path.join(conf.DATA_DIR, "model_runs")
-        model_save_path = os.path.join(pardir, f"{run_name}.pt")
+    print(f"Copy this to download logs --> {wandb.run.entity}/{wandb.run.project}/{wandb.run.id}")
+    print(f"LOCAL DIRECTORY NAME: {wandb.run.dir}")
+    print(f"LOCAL FILE NAME: run-{wandb.run.name}")
+    print("----------------------------------------------------")
 
-        if not os.path.isdir(pardir):
-            os.mkdir(pardir)
+    run_name = wandb.run.dir.split(os.sep)[-2]
+    pardir = os.path.join(conf.DATA_DIR, "model_runs")
+    model_save_path = os.path.join(pardir, f"{run_name}.pt")
 
-        wandb.define_metric("train_loss", summary="min")
-        wandb.define_metric("val_loss", summary="min")
-        wandb.define_metric("metric", summary="min")
+    if not os.path.isdir(pardir):
+        os.mkdir(pardir)
 
-        print_w_time("GETTING DATALOADERS")
-        train_dataloader, val_dataloader, test_dataloader, dataloader_train_for_metrics = \
-            get_data_loaders(conf)
+    wandb.define_metric("train_loss", summary="min")
+    wandb.define_metric("val_loss", summary="min")
+    wandb.define_metric("metric", summary="min")
 
-        print_w_time("BUILDING MODEL")
-        model = get_model_instance(conf)
-        model.to(conf.device)
+    print_w_time("GETTING DATALOADERS")
+    train_dataloader, val_dataloader, test_dataloader, dataloader_train_for_metrics = \
+        get_data_loaders(conf)
 
-        print_w_time("WRITING GRAPH SUMMARY")
-        for batch in val_dataloader:
-            batch.to(conf["device"])
-            break
+    print_w_time("BUILDING MODEL")
+    model = get_model_instance(conf)
+    model.to(conf.device)
 
-        ###################################################################################################
-        # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
-        # print(model_summary)
+    print_w_time("WRITING GRAPH SUMMARY")
+    for batch in val_dataloader:
+        batch.to(conf["device"])
+        break
 
-        print_w_time("TRAINING")
-        model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name, trigger_sync=trigger_sync)
+    ###################################################################################################
+    # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
+    # print(model_summary)
 
-        print_w_time("SAVING MODEL")
-        if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_runs")):
-            os.mkdir(os.path.join(conf["DATA_DIR"], "model_runs"))
-        torch.save(model.state_dict(), model_save_path)
-        model.eval()
-        model.cpu()
+    print_w_time("TRAINING")
+    model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name, trigger_sync=trigger_sync)
 
-        with torch.no_grad():
-            test_loss, metric_results = test(test_dataloader, model, conf)
-            print(f"Test loss: {test_loss}")
-            print(f"Test metrics: {metric_results}")
+    print_w_time("SAVING MODEL")
+    if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_runs")):
+        os.mkdir(os.path.join(conf["DATA_DIR"], "model_runs"))
+    torch.save(model.state_dict(), model_save_path)
+    model.eval()
+    model.cpu()
 
-            final_metric = sum([metric_results["MAE"][k] for k in conf["physical_labels"]])
-            metric_results = {f"test_{k}":v for k,v in metric_results.items()}
-            metric_results.update({"test_loss":test_loss})
-            metric_results.update({"test_metric":final_metric})
+    with torch.no_grad():
+        test_loss, metric_results = test(test_dataloader, model, conf)
+        print(f"Test loss: {test_loss}")
+        print(f"Test metrics: {metric_results}")
 
-            wandb.log(metric_results)
+        final_metric = sum([metric_results["MAE"][k] for k in conf["physical_labels"]])
+        metric_results = {f"test_{k}":v for k,v in metric_results.items()}
+        metric_results.update({"test_loss":test_loss})
+        metric_results.update({"test_metric":final_metric})
 
-            plot_test_images_from_model(conf, model, run_name, test_dataloader)
-            # for batch in tqdm(test_dataloader):
-            #     pred_batch = model(**get_input_to_model(batch))
+        wandb.log(metric_results)
 
-            #     if isinstance(pred_batch, tuple):
-            #         residuals = pred_batch[1]
-            #         pred_batch = pred_batch[0]
+        plot_test_images_from_model(conf, model, run_name, test_dataloader)
 
-            #     for i in range(len(batch)):
-            #         data = batch[i]
-            #         pred = pred_batch[batch.ptr[i]:batch.ptr[i+1]]
-            #         plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name)
-            #         # TODO: add residuals plot!
-            #         # residuals = residuals[batch.ptr[i]:batch.ptr[i+1]]
-            #         # plot_gt_pred_label_comparison(data, pred, conf, run_name=run_name, residuals=True)
-
-        # artifact = wandb.Artifact(name="test_img_results", type="png")
-        # artifact.add_dir(local_path=os.path.join(conf.test_imgs_comparisons, run_name))
-        # wandb.run.log_artifact(artifact)
-
-        # artifact = wandb.Artifact(name="test_html_results", type="html")
-        # artifact.add_dir(local_path=os.path.join(conf.test_htmls_comparisons, run_name))
-        # wandb.run.log_artifact(artifact)
+    if trigger_sync is not None:
+        trigger_sync()
