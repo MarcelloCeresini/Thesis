@@ -391,7 +391,7 @@ def train(
                 total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights[k]
             wandb.log({f"weight_{k}":v for k,v in loss_weights.items()}, epoch)
             wandb.log({f"reweighted_{k}":v for k,v in total_loss_dict_reweighted.items()}, epoch)
-            # TODO: add bias correction
+            
             for k in loss_dict:
                 loss_weights_uncorrected[k] = \
                     (1-conf.lambda_dynamic_weights) * \
