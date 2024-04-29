@@ -293,18 +293,18 @@ class Config():
 
         ################################################
 
-        self.bool_radial_attributes = False
+        self.bool_radial_attributes = True
         if self.bool_radial_attributes:
             self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)+self.n_radial_attributes
         else:
             self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)
 
         self.PINN_mode: Literal["supervised_only", "supervised_with_sampling", "continuity_only", "full_laminar", "turbulent_kw"] \
-            = "turbulent_kw"
+            = "supervised_only"
         
         self.bool_algebraic_continuity = True
         
-        self.output_turbulence: bool = True
+        self.output_turbulence: bool = False
         if self.PINN_mode == "turbulent_kw" and not self.output_turbulence:
             print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
             self.output_turbulence = True
@@ -328,7 +328,7 @@ class Config():
         self.bool_bootstrap_bias = True
         self.bootstrap_bias = {k:self.dict_labels_train["mean"][k] for k in self.labels_to_keep_for_training}
 
-        self.flag_BC_PINN: bool = True
+        self.flag_BC_PINN: bool = False
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] \
             = "new_edges"
         self.graph_sampling_p_for_interpolation = 0.01
@@ -355,10 +355,10 @@ class Config():
         self.standard_weights = {
             "supervised": 1,
             "supervised_on_sampled": 1,
-            "boundary": 10,
-            "continuity": 1000,
+            "boundary": 1,
+            "continuity": 1,
             "momentum_x": 1,
-            "algebraic_continuity": 10000
+            "algebraic_continuity": 1,
         }
         self.standard_weights["momentum_y"] = self.standard_weights["momentum_x"]
 
@@ -375,10 +375,11 @@ class Config():
         self.minimum_momentum_relative_weight = 0.01
         self.maximum_momentum_relative_weight = 0.5
 
-        self.dynamic_loss_weights = False
+        self.dynamic_loss_weights = True
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"
         self.main_loss_component_dynamic = "supervised"
-        self.lambda_dynamic_weights = 0.3 # (0.1 in NSFnets arXiv:2003.06496v1)
+        # https://iopscience.iop.org/article/10.1088/2399-6528/ace416/pdf
+        self.lambda_dynamic_weights = 0.001 # (0.1 in NSFnets arXiv:2003.06496v1)
         self.gamma_loss = 10
 
         self.gradient_clip_value = 1
