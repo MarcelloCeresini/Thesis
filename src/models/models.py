@@ -1065,14 +1065,15 @@ class PINN(nn.Module):
                     pred_coefficients = get_coefficients(self.conf, data, pred_supervised_pts_pressure, 
                         velocity_derivatives=pred_vel_derivatives, turbulent_values=pred_turb_values, 
                         denormalize=True, from_boundary_sampling=True)
+                    
+                    aero_loss["main_shear"] = aero_loss.get("main_shear", 0) \
+                        + self.net.loss(pred_coefficients["main_flap"][1], data.components_coefficients["main_flap"][1])
                 else:
                     pred_coefficients = get_coefficients(self.conf, data, pred_supervised_pts_pressure, denormalize=True)
             
                 aero_loss["main_pressure"] = aero_loss.get("main_pressure", 0) \
                     + self.net.loss(pred_coefficients["main_flap"][0], data.components_coefficients["main_flap"][0])
-                aero_loss["main_shear"] = aero_loss.get("main_shear", 0) \
-                    + self.net.loss(pred_coefficients["main_flap"][1], data.components_coefficients["main_flap"][1])
-                
+
             loss_dict.update({f"aero_loss_{k}": aero_loss[k]/batch_size for k in aero_loss})
         
 
