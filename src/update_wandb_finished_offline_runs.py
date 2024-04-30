@@ -7,11 +7,11 @@ good_runs = [
     # "pnyash2s", # magic-oath-39
     # "ekffajd8", # desert-disco-41
     # "ywoed45q", # cool-pine-45
-    # "0az598nq", # deep-capybara-49
+    "0az598nq", # deep-capybara-49
     # "1fagc6rx", # brisk-galaxy-50
-    "htb6vv54", # silver-flower-51
-    "kylpiqqd", # apricot-deluge-52
-    "p68fr2sa"  # worldy-music-55
+    # "htb6vv54", # silver-flower-51
+    # "kylpiqqd", # apricot-deluge-52
+    # "p68fr2sa"  # worldy-music-55
 ]
 
 def update_summary(run_id):

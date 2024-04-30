@@ -160,12 +160,12 @@ def train(
         os.mkdir(os.path.join(conf["DATA_DIR"], "model_checkpoints"))
     os.mkdir(os.path.join(conf["DATA_DIR"], "model_checkpoints", run_name))
 
-    wandb.watch(
-        model,
-        log=conf["logging"]["model_log_mode"],
-        log_freq=conf["logging"]["n_batches_freq"],
-        log_graph=conf["logging"]["log_graph"]
-    )
+    # wandb.watch(
+    #     model,
+    #     log=conf["logging"]["model_log_mode"],
+    #     log_freq=conf["logging"]["n_batches_freq"],
+    #     log_graph=conf["logging"]["log_graph"]
+    # )
 
     opt = Adam(
         params = model.parameters(),
@@ -211,7 +211,7 @@ def train(
             
             batch.to(conf.device)
 
-            if conf.dynamic_loss_weights:
+            if conf.dynamic_loss_weights and conf.parallel_dynamic_weights:
                 def compute_loss_key(params, buffers, batch, labels, loss_key_idx):
 
                     pred = functional_call(model, (params, buffers), args=(), kwargs=get_input_to_model(batch))
@@ -260,18 +260,17 @@ def train(
                 # TODO: do it each BATCH? or each EPOCH? in any case, log each EPOCH?
                 if conf.dynamic_loss_weights:
                     assert conf.main_loss_component_dynamic in loss_dict, f"{conf.main_loss_component_dynamic} not in loss_dict keys: {list(loss_dict.keys())}"
+                    if not conf.parallel_dynamic_weights:
+                        gradients = {}
+                        for k in loss_dict:
+                            loss_dict[k].backward(retain_graph=True)
+                            gradients[k] = {}
+                            for name, param in model.named_parameters():
+                                if isinstance(param.grad, torch.Tensor):
+                                    gradients[k][name] = gradients[k].get(name, 0) + param.grad
+                            opt.zero_grad(set_to_none=True)
+                            
                     for k in loss_dict:
-                    #     loss_dict[k].backward(retain_graph=True)
-                    #     grads[k] = {}
-                    #     # for param in model.named_parameters():
-                    #     #     print(f"True - {param[0]}" if isinstance(param[1].grad, torch.Tensor) else f"False - {param[0]}")
-                    #     for name, param in model.named_parameters():
-                    #         if isinstance(param.grad, torch.Tensor):
-                    #             grads[k][name] = grads[k].get(name, 0) + param.grad
-                    #     opt.zero_grad(set_to_none=True)
-                        # mean_grads[k] = mean_grads.get(k, 0) + \
-                        #                     torch.cat([param.grad.view(-1) for param in model.parameters() 
-                        #                         if isinstance(param.grad, torch.Tensor)]).abs().mean()
                         grad_norm_dyn[k] = grad_norm_dyn.get(k, 0) \
                             + torch.cat([v.view(-1) for v in gradients[k].values()]).norm()
                     
@@ -418,11 +417,16 @@ def train(
                     (1-conf.lambda_dynamic_weights) * \
                         loss_weights_uncorrected[k] + \
                     conf.lambda_dynamic_weights     * \
-                        conf.standard_weights[k] * float((grad_norm_dyn[conf.main_loss_component_dynamic]/grad_norm_dyn[k]).cpu())
+                        conf.standard_weights[k] * float((grad_norm_dyn[conf.main_loss_component_dynamic]/(grad_norm_dyn[k].clamp_min(1e-12))).cpu())
             
             for k in loss_dict: # bias correction
                 loss_weights[k] = loss_weights_uncorrected[k] / (1 - (1-conf.lambda_dynamic_weights)**counter_dynamic_loss)
             
+            if conf.get("physical_constraint_loss", False):
+                loss_weights["negative_k"] = min(loss_weights["negative_k"], loss_weights["supervised"])
+                loss_weights["negative_w"] = min(loss_weights["negative_w"], loss_weights["supervised"])
+
+            pass
             # print(loss_weights)
                 # leave "conf.standard_weights[k]" so that you can control the relative importance
                 # otherwise all the components would have the same importance (and you couldn't change that)

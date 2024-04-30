@@ -11,6 +11,6 @@ training:
 
 val:
   n_epochs_val: 10
-  n_workers_dataloaders: 4
+  n_workers_dataloaders: 2
 
 loss: MSE_loss

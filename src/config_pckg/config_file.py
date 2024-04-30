@@ -35,9 +35,11 @@ class Config():
             self.EXTERNAL_FOLDER = self.DATA_DIR
             self.new_home = os.path.join("/gpfs", "prj", "cfd", "CFD-RD_SOLVER", "marcello")
             self.wandb_communication_dir = os.path.join("/gpfs", "prj", "cfd", "CFD-RD_SOLVER", "marcello", ".wandb_communication_dir")
+            self.parallel_dynamic_weights = True
         else:
             self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
-        
+            self.parallel_dynamic_weights = False
+            
         self.EXTERNAL_FOLDER_MSH = os.path.join(self.EXTERNAL_FOLDER, "Mesh_ascii")
         self.EXTERNAL_FOLDER_CSV = os.path.join(self.EXTERNAL_FOLDER, "CSV_ascii")
         self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
@@ -300,11 +302,11 @@ class Config():
             self.input_dim = len(self.graph_node_feature_dict)+len(self.graph_node_feature_mask)
 
         self.PINN_mode: Literal["supervised_only", "supervised_with_sampling", "continuity_only", "full_laminar", "turbulent_kw"] \
-            = "supervised_only"
+            = "turbulent_kw"
         
         self.bool_algebraic_continuity = True
-        
-        self.output_turbulence: bool = False
+        self.bool_aero_loss: bool = True
+        self.output_turbulence: bool = True
         if self.PINN_mode == "turbulent_kw" and not self.output_turbulence:
             print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
             self.output_turbulence = True
@@ -313,7 +315,7 @@ class Config():
             self.labels_to_keep_for_training += self.labels_to_keep_for_training_turbulence
         self.output_dim = len(self.labels_to_keep_for_training)
 
-        self.activation_for_max_normalized_features = True
+        self.activation_for_max_normalized_features = False
         if self.activation_for_max_normalized_features:
             self.idx_to_apply_activation = torch.tensor([True \
                 if self.label_normalization_mode.get(tmp, {}).get("main", "") == "max-normalization" else False\
@@ -328,7 +330,7 @@ class Config():
         self.bool_bootstrap_bias = True
         self.bootstrap_bias = {k:self.dict_labels_train["mean"][k] for k in self.labels_to_keep_for_training}
 
-        self.flag_BC_PINN: bool = False
+        self.flag_BC_PINN: bool = True
         self.inference_mode_latent_sampled_points: Literal["squared_distance", "fourier_features", "baseline_positional_encoder", "new_edges"] \
             = "new_edges"
         self.graph_sampling_p_for_interpolation = 0.01
@@ -337,12 +339,12 @@ class Config():
         domain_sampling_mode: Literal["all_domain", "percentage_of_domain", "uniformly_cells"] = \
                 "uniformly_cells"
         self.domain_sampling = {"mode": domain_sampling_mode, 
-                                    "percentage": 0.5}
+                                    "percentage": 0.2}
 
         boundary_sampling_mode: Literal["all_boundary", "percentage_of_boundary"] = \
                 "all_boundary"
         self.boundary_sampling = {"mode": boundary_sampling_mode, 
-                                    "percentage": 3.,
+                                    "percentage": 1.,
                                     "shift_on_face":True}
 
         self.general_sampling = {"add_edges": True,
@@ -359,6 +361,8 @@ class Config():
             "continuity": 1,
             "momentum_x": 1,
             "algebraic_continuity": 1,
+            "aero_loss_main_pressure": 1,
+            "aero_loss_main_shear": 1,
         }
         self.standard_weights["momentum_y"] = self.standard_weights["momentum_x"]
 
@@ -379,7 +383,7 @@ class Config():
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"
         self.main_loss_component_dynamic = "supervised"
         # https://iopscience.iop.org/article/10.1088/2399-6528/ace416/pdf
-        self.lambda_dynamic_weights = 0.001 # (0.1 in NSFnets arXiv:2003.06496v1)
+        self.lambda_dynamic_weights = 0.01 # (0.1 in NSFnets arXiv:2003.06496v1)
         self.gamma_loss = 10
 
         self.gradient_clip_value = 1

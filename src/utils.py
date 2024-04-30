@@ -542,30 +542,30 @@ def denormalize_label(values, label, conf):
     match label_normalization_mode[label]["main"]:
         case "physical":
             if label in ["x-velocity", "y-velocity"]:
-                values *= conf["air_speed"]
+                new_values = values * conf["air_speed"]
             elif label == "pressure":
-                values *= conf["Q"]
+                new_values = values * conf["Q"]
             else:
                 raise ValueError(f"Physical normalization no available for {label}")
         case "max-normalization":
             if (label in ["x-velocity", "y-velocity"]) and \
                     label_normalization_mode[label].get("magnitude", False):
-                values *= dict_labels_train["max_magnitude"]["v_mag"]
+                new_values = values * dict_labels_train["max_magnitude"]["v_mag"]
             else:
-                values *= dict_labels_train["max_magnitude"][label]
+                new_values = values * dict_labels_train["max_magnitude"][label]
 
         case "standardization":
             if (label in ["x-velocity", "y-velocity"]) and \
                     label_normalization_mode[label].get("magnitude", False):
-                values = values*dict_labels_train["std"]["v_mag"]+ \
+                new_values = values*dict_labels_train["std"]["v_mag"]+ \
                             dict_labels_train["mean"]["v_mag"]
             else:
-                values = values*dict_labels_train["std"][label]+\
+                new_values = values*dict_labels_train["std"][label]+\
                             dict_labels_train["mean"][label]
         case _:
             raise NotImplementedError()
         
-    return values
+    return new_values
 
 
 def plot_gt_pred_label_comparison(data: Data, model_output, conf, run_name: Optional[str]= None):
@@ -652,7 +652,7 @@ def get_coefficients_for_component(
     if slice.shape[0] == 0:
         return torch.tensor((0., 0.), device=slice.device), torch.tensor((0., 0.), device=slice.device)
     
-    pressure_values = copy.copy(pressure_values[slice])
+    pressure_values = torch.clone(pressure_values[slice])
     inward_normal_areas = data.inward_normal_areas[slice]
 
     # plt.scatter(data.pos[slice,0], data.pos[slice,1])
