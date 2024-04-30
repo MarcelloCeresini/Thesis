@@ -75,7 +75,7 @@ def get_data_loaders(conf):
                             shuffle=True, 
                             num_workers=n_workers_train, 
                             persistent_workers=n_workers_train>0,
-                            pin_memory=True,
+                            pin_memory=True if conf.device is not "cpu" else False,
                             pin_memory_device=conf.device,
                             )
     n_workers_val=conf["hyper_params"]["val"]["n_workers_dataloaders"] if not DEBUGGING else 0
