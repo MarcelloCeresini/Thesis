@@ -39,7 +39,7 @@ class Config():
         else:
             self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
             self.parallel_dynamic_weights = False
-            
+
         self.EXTERNAL_FOLDER_MSH = os.path.join(self.EXTERNAL_FOLDER, "Mesh_ascii")
         self.EXTERNAL_FOLDER_CSV = os.path.join(self.EXTERNAL_FOLDER, "CSV_ascii")
         self.EXTERNAL_FOLDER_MESHCOMPLETE = os.path.join(self.EXTERNAL_FOLDER, "MeshCompleteObjs")
@@ -387,7 +387,7 @@ class Config():
         self.gamma_loss = 10
 
         self.gradient_clip_value = 1
-        self.gradient_clip_value_norm = 5 # ~ initial norm in a training
+        self.gradient_clip_value_norm = 1 # ~ initial norm in a training
         self.maximum_grad_value = 0.01 # after lr
 
         self.logging = {
