@@ -154,7 +154,7 @@ def train(
         **kwargs):
     
     trigger_sync: Optional[TriggerWandbSyncHook] = kwargs.get("trigger_sync", None)
-    loss_keys_map: Optional[dict] = kwargs.get("loss_keys_map", None)
+    loss_keys_list: Optional[dict] = kwargs.get("loss_keys_list", None)
 
     if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_checkpoints")):
         os.mkdir(os.path.join(conf["DATA_DIR"], "model_checkpoints"))
@@ -207,33 +207,42 @@ def train(
 
         model.train()
         for batch in tqdm(train_loader, leave=False, desc="Batch in epoch", position=1):
-            grads = {}
             opt.zero_grad(set_to_none=True)
             
             batch.to(conf.device)
 
             if conf.dynamic_loss_weights:
-
                 def compute_loss_key(params, buffers, batch, labels, loss_key_idx):
 
-                    pred = functional_call(model, (params, buffers), **get_input_to_model(batch))
+                    pred = functional_call(model, (params, buffers), args=(), kwargs=get_input_to_model(batch))
                     loss = model.loss(pred, labels, batch)
-                    return loss[loss_keys_map[loss_key_idx]], loss[loss_keys_map[loss_key_idx]]
+                    
+                    loss_list = torch.zeros(len(loss_keys_list))
+                    for i, k in enumerate(loss_keys_list):
+                        loss_list[i] = loss[1][k]
+
+                    # [0] because you need a scalar output, and .view(-1) doesn't work even if the shape is [1]
+                    correct_loss_component = loss_list.index_select(0, loss_key_idx.view(1))[0] 
+                    return correct_loss_component, loss # gradient only wrt correct_loss_component
                 
                 params = {k: v.detach() for k, v in model.named_parameters()}
                 buffers = {k: v.detach() for k, v in model.named_buffers()}
                 labels = clean_labels(batch, model.conf)
 
-                grads_and_loss = vmap(grad_and_value(compute_loss_key), in_dims=(None, None, None, None, 0))(
-                    params, buffers, batch, labels, torch.arange(len(loss_keys_map))
+                gradients, loss = vmap(
+                    grad(compute_loss_key, has_aux=True), 
+                    in_dims=(None, None, None, None, 0),
+                    out_dims=(0, None))(
+                        params, buffers, batch, labels, torch.arange(len(loss_keys_list)).view(-1)
                 )
 
-                
+                # separate gradients into dicts for each component of loss
+                gradients = {k:{k2:v[i,...] for k2, v in gradients.items()} for i, k in enumerate(loss_keys_list)}
 
-
-            pred = model(**get_input_to_model(batch))
-            labels = clean_labels(batch, model.conf)
-            loss = model.loss(pred, labels, batch)
+            else:
+                pred = model(**get_input_to_model(batch))
+                labels = clean_labels(batch, model.conf)
+                loss = model.loss(pred, labels, batch)
 
             if isinstance(loss, tuple):
                 standard_loss = loss[0]
@@ -252,21 +261,22 @@ def train(
                 if conf.dynamic_loss_weights:
                     assert conf.main_loss_component_dynamic in loss_dict, f"{conf.main_loss_component_dynamic} not in loss_dict keys: {list(loss_dict.keys())}"
                     for k in loss_dict:
-                        loss_dict[k].backward(retain_graph=True)
-                        grads[k] = {}
-                        # for param in model.named_parameters():
-                        #     print(f"True - {param[0]}" if isinstance(param[1].grad, torch.Tensor) else f"False - {param[0]}")
-                        for name, param in model.named_parameters():
-                            if isinstance(param.grad, torch.Tensor):
-                                grads[k][name] = grads[k].get(name, 0) + param.grad
-                        opt.zero_grad(set_to_none=True)
+                    #     loss_dict[k].backward(retain_graph=True)
+                    #     grads[k] = {}
+                    #     # for param in model.named_parameters():
+                    #     #     print(f"True - {param[0]}" if isinstance(param[1].grad, torch.Tensor) else f"False - {param[0]}")
+                    #     for name, param in model.named_parameters():
+                    #         if isinstance(param.grad, torch.Tensor):
+                    #             grads[k][name] = grads[k].get(name, 0) + param.grad
+                    #     opt.zero_grad(set_to_none=True)
                         # mean_grads[k] = mean_grads.get(k, 0) + \
                         #                     torch.cat([param.grad.view(-1) for param in model.parameters() 
                         #                         if isinstance(param.grad, torch.Tensor)]).abs().mean()
-                        grad_norm_dyn[k] = grad_norm_dyn.get(k, 0) + torch.cat([v.view(-1) for v in grads[k].values()]).norm()
+                        grad_norm_dyn[k] = grad_norm_dyn.get(k, 0) \
+                            + torch.cat([v.view(-1) for v in gradients[k].values()]).norm()
                     
                     for name, param in model.named_parameters():
-                        total_grad = sum([grads[k].get(name, 0)*loss_weights[k] for k in grads])
+                        total_grad = sum([gradients[k].get(name, 0)*loss_weights[k] for k in gradients])
                         if isinstance(total_grad, torch.Tensor):
                             param.grad = total_grad
 

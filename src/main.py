@@ -86,14 +86,14 @@ if __name__ == "__main__":
         break
 
     loss_dict = loss[1]
-    loss_keys_map = {i:k for i, k in enumerate(loss_dict)}
+    loss_keys_list = [k for k in loss_dict]
     
     ###################################################################################################
     # model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
     # print(model_summary)
 
     print_w_time("TRAINING")
-    model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name, trigger_sync=trigger_sync, loss_keys_map=loss_keys_map)
+    model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name, trigger_sync=trigger_sync, loss_keys_list=loss_keys_list)
 
     print_w_time("SAVING MODEL")
     if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_runs")):

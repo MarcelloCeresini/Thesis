@@ -571,6 +571,7 @@ class PINN(nn.Module):
 
 
     def forward(self,
+            *,
             x: torch.Tensor,
             x_mask: torch.Tensor,
             x_additional: torch.Tensor, 
