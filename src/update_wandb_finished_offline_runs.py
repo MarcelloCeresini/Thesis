@@ -2,19 +2,41 @@ from typing import Union
 import wandb, pprint
 api = wandb.Api()
 
-run_id = "0az598nq"
+good_runs = [
+    # "2ygcpwue", # lemon-grass-38
+    # "pnyash2s", # magic-oath-39
+    # "ekffajd8", # desert-disco-41
+    # "ywoed45q", # cool-pine-45
+    # "0az598nq", # deep-capybara-49
+    # "1fagc6rx", # brisk-galaxy-50
+    "htb6vv54", # silver-flower-51
+    "kylpiqqd", # apricot-deluge-52
+    "p68fr2sa"  # worldy-music-55
+]
 
-run = api.run(f"marcelloceresini/Thesis/{run_id}")
-summary = {}
-i=0
-for row in run.scan_history():
-    # print(i)
-    # i+=1
-    summary.update(row)
-    # for k,v in row.items():
-    #     if isinstance(v, Union[None|str|float|int]):
-    #         summary.update({k: v})
+def update_summary(run_id):
+    run = api.run(f"marcelloceresini/Thesis/{run_id}")
+    summary = {}
+    i=0
+    for row in run.scan_history():
+        # print(i)
+        # i+=1
+        # summary.update(row)
+        # summary.update({k:v for k, v in row.items() if v is not None})
+        for k,v in row.items():
+            if "test" in k:
+                if v is not None:
+                    summary.update({k: v})
+        #     if isinstance(v, Union[str|float|int]):
+        #         summary.update({k: v})
+        #     if "metric" in k:
+        #         pass
+        #     if "min" in k:
+        #         pass
 
-pprint.pprint(summary)
-run.summary.update(summary)
-print("Updated summary to: ", summary)
+    run.summary.update(summary)
+
+
+if __name__ == "__main__":
+    for run_id in good_runs:
+        update_summary(run_id)
