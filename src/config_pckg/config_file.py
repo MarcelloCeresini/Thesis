@@ -36,6 +36,11 @@ class Config():
             self.new_home = os.path.join("/gpfs", "prj", "cfd", "CFD-RD_SOLVER", "marcello")
             self.wandb_communication_dir = os.path.join("/gpfs", "prj", "cfd", "CFD-RD_SOLVER", "marcello", ".wandb_communication_dir")
             self.parallel_dynamic_weights = True
+
+            import resource
+            rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
+            resource.setrlimit(resource.RLIMIT_NOFILE, (rlimit[1], rlimit[1]))
+
         else:
             self.EXTERNAL_FOLDER = os.path.join("K:", "CFD-WT", "ML_AI", "2D_V01_database")
             self.parallel_dynamic_weights = False
