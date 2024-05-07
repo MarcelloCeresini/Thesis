@@ -1049,7 +1049,7 @@ class PINN(nn.Module):
                         loss_dict[k] = (supervised_value_ub) * tmp / tmp.item()
 
 
-        if self.conf.bool_aero_loss:
+        if self.conf.get("bool_aero_loss", False):
             aero_loss = {}
             for i in range(len(batch)):
                 data = batch[i]
