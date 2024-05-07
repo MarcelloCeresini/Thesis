@@ -72,13 +72,6 @@ def add_test_results(test_dataloader, model, conf, run_name):
 def complete_unfinished_run(run_id):
     conf = get_wandb_run_from_id(run_id)
     
-    # for newer runs
-    # conf.update({"Q": (conf.air_density * conf.air_speed**2)/2}, allow_val_change=True)
-    # # for older runs
-    conf.update({"Q": conf.air_speed**2/2}, allow_val_change=True)
-    conf.test_vtk_comparisons = os.path.join(conf.DATA_DIR, "test_vtk_comparisons")
-    conf.bool_algebraic_continuity = True
-
     model = get_model_instance(conf)
     run_name = wandb.run.dir.split(os.sep)[-2]
     model = load_model_weights(conf, wandb.run.id, model)
@@ -87,12 +80,19 @@ def complete_unfinished_run(run_id):
     train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics = get_data_loaders(conf)
     print("done")
 
+    for batch in train_dataloader_for_metrics:
+        batch.to(conf["device"])
+        break
+
+    model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
+    print(model_summary)
+
     add_test_results(test_dataloader, model, conf, run_name)
 
 
 if __name__ == "__main__":
 
-    complete_unfinished_run("njn8zuql")
+    complete_unfinished_run("0egkpy0z")
     sys.exit()
 
     WANDB_MODE: Literal["online", "offline"] = "online"
