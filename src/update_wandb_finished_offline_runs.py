@@ -20,8 +20,9 @@ good_runs = [
 
 def update_summary(run_id):
     run = api.run(f"marcelloceresini/Thesis/{run_id}")
-    summary = {}
+    tmp_summary = {}
     i=0
+    metric_list = []
     for row in run.scan_history():
         # print(i)
         # i+=1
@@ -30,7 +31,10 @@ def update_summary(run_id):
         for k,v in row.items():
             if "test" in k:
                 if v is not None:
-                    summary.update({k: v})
+                    tmp_summary.update({k: v})
+            if "metric" == k:
+                if v is not None:
+                    metric_list.append(v)
         #     if isinstance(v, Union[str|float|int]):
         #         summary.update({k: v})
         #     if "metric" in k:
@@ -38,9 +42,12 @@ def update_summary(run_id):
         #     if "min" in k:
         #         pass
 
-    run.summary.update(summary)
+    tmp_summary["metric"] = {"min":min(metric_list)}
+    # print(list(run.summary._dict.keys()))
+    run.summary.update(tmp_summary)
 
 
 if __name__ == "__main__":
     for run_id in good_runs:
+        print(run_id)
         update_summary(run_id)

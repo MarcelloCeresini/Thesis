@@ -28,16 +28,21 @@ from models.models import get_model_instance, PINN
 from train import test
 
 
-def load_model_weights(conf, run_id, model):
-    dirlist = sorted(glob.glob(os.path.join(conf.DATA_DIR, "model_runs", "*.pt")))
+def load_model_weights(conf, run_id, model, from_cluster: bool):
+    if from_cluster:
+        data_dir = os.path.join("H:",*conf.DATA_DIR.split("/")[-4:])
+    else:
+        data_dir = conf.DATA_DIR
+    
+    dirlist = sorted(glob.glob(os.path.join(data_dir, "model_runs", "*.pt")))
     for finished_run in dirlist:
         finished_run_id = finished_run.split("-")[-1].removesuffix(".pt")
         if run_id == finished_run_id:
             model.load_state_dict(
-                torch.load(os.path.join(conf.DATA_DIR, "model_runs", finished_run)))
+                torch.load(os.path.join(data_dir, "model_runs", finished_run)))
             return model
     
-    dirlist_checkpoints = sorted(glob.glob(os.path.join(conf.DATA_DIR, "model_checkpoints", "*")))
+    dirlist_checkpoints = sorted(glob.glob(os.path.join(data_dir, "model_checkpoints", "*")))
     for checkpoint_dir in dirlist_checkpoints:
         checkpoint_run_id = checkpoint_dir.split(os.sep)[-1].split("-")[-1]
         if run_id == checkpoint_run_id:
@@ -56,43 +61,47 @@ def get_wandb_run_from_id(run_id):
     return wandb.config
 
 
-def add_test_results(test_dataloader, model, conf, run_name):
+def add_test_results(test_dataloader, model, conf, run_name, from_cluster):
     with torch.no_grad():
-        test_loss, metric_results = test(test_dataloader, model, conf,)
+        test_loss, metric_results = test(test_dataloader, model, conf)
         print(f"Test loss: {test_loss}")
         print(f"Test metrics: {metric_results}")
 
+        final_metric = sum([metric_results["MAE"][k] for k in conf["physical_labels"]])
         metric_results = {f"test_{k}":v for k,v in metric_results.items()}
         metric_results.update({"test_loss":test_loss})
+        metric_results.update({"test_metric":final_metric})
+
         wandb.log(metric_results)
 
-        utils.plot_test_images_from_model(conf, model, run_name, test_dataloader)
+        if not from_cluster:
+            utils.plot_test_images_from_model(conf, model, run_name, test_dataloader)
 
 
-def complete_unfinished_run(run_id):
+def complete_unfinished_run(run_id, from_cluster: bool = False):
     conf = get_wandb_run_from_id(run_id)
     
     model = get_model_instance(conf)
     run_name = wandb.run.dir.split(os.sep)[-2]
-    model = load_model_weights(conf, wandb.run.id, model)
-    
+    model = load_model_weights(conf, wandb.run.id, model, from_cluster=from_cluster)
+
     print("Getting dataloaders")
-    train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics = get_data_loaders(conf)
+    train_dataloader, val_dataloader, test_dataloader, train_dataloader_for_metrics = get_data_loaders(conf, from_cluster=from_cluster)
     print("done")
 
     for batch in train_dataloader_for_metrics:
-        batch.to(conf["device"])
         break
 
     model_summary = summary(model, **get_input_to_model(batch), leaf_module=None)
     print(model_summary)
 
-    add_test_results(test_dataloader, model, conf, run_name)
+    add_test_results(test_dataloader, model, conf, run_name, from_cluster)
 
 
 if __name__ == "__main__":
 
-    complete_unfinished_run("0egkpy0z")
+    complete_unfinished_run("i6a0k4ca", from_cluster=False)
+    wandb.finish()
     sys.exit()
 
     WANDB_MODE: Literal["online", "offline"] = "online"

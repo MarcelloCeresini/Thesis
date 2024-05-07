@@ -30,7 +30,7 @@ class CfdDataset(InMemoryDataset):
         return torch.load(os.path.join(self.root, self.data_filenames[idx]))
 
 
-def get_data_loaders(conf):
+def get_data_loaders(conf, from_cluster: bool = False):
 
     gettrace = getattr(sys, 'gettrace', None)
     if gettrace is not None:
@@ -64,10 +64,15 @@ def get_data_loaders(conf):
     transforms_train = pyg_t.Compose(transform_list_train+general_transforms)
     transforms_test = pyg_t.Compose(transform_list_test+general_transforms)
 
-    dataset_train = CfdDataset(np.array(conf["split_idxs"]["train"]), root=conf["standard_dataset_dir"], transform=transforms_train)
-    dataset_val = CfdDataset(np.array(conf["split_idxs"]["val"]), root=conf["standard_dataset_dir"], transform=transforms_test)
-    dataset_test = CfdDataset(np.array(conf["split_idxs"]["test"]), root=conf["standard_dataset_dir"], transform=transforms_test)
-    dataset_train_for_metrics = CfdDataset(np.array(conf["split_idxs"]["train"]), root=conf["standard_dataset_dir"], transform=transforms_test)
+    if from_cluster:
+        dataset_dir = os.path.join("H:",*conf["standard_dataset_dir"].split("/")[-5:])
+    else:
+        dataset_dir = conf["standard_dataset_dir"]
+
+    dataset_train = CfdDataset(np.array(conf["split_idxs"]["train"]), root=dataset_dir, transform=transforms_train)
+    dataset_val = CfdDataset(np.array(conf["split_idxs"]["val"]), root=dataset_dir, transform=transforms_test)
+    dataset_test = CfdDataset(np.array(conf["split_idxs"]["test"]), root=dataset_dir, transform=transforms_test)
+    dataset_train_for_metrics = CfdDataset(np.array(conf["split_idxs"]["train"]), root=dataset_dir, transform=transforms_test)
 
     n_workers_train=conf["hyper_params"]["training"]["n_workers_dataloaders"] if not DEBUGGING else 0
     train_dataloader = DataLoader(dataset_train, 
