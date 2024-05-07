@@ -82,7 +82,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                     total_optional_values[k] = total_optional_values.get(k,0) + \
                                             optional_values[k].item()*batch.num_graphs
                 if conf["dynamic_loss_weights"]:
-                    loss = sum(loss_dict[k]*loss_weights[k] for k in loss_dict)
+                    loss = sum(loss_dict[k]*loss_weights.get(k,1) for k in loss_dict)
                 else:
                     loss = sum(loss_dict[k] for k in loss_dict)
             
@@ -128,7 +128,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
         for k in total_optional_values: total_optional_values[k] /= len(loader.dataset)
         if conf["dynamic_loss_weights"]:
             for k in total_loss_dict: 
-                total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights[k]
+                total_loss_dict_reweighted[k] = total_loss_dict[k]*loss_weights.get(k,1)
         
         metric_results = compute_metric_results(metric_dict, conf)
         metric_aero_dict = metric_aero.compute()
