@@ -417,7 +417,7 @@ def train(
 
             
             for k in loss_dict:
-                if k in ["momentum_x", "momentum_y", "aero_loss_main_shear"]: # different lambdas for unstable components
+                if k in ["momentum_x", "momentum_y", "aero_loss_main_shear", "aero_loss_flap_shear"]: # different lambdas for unstable components
                     tmp_lambda = conf.lambda_dynamic_weights_for_denormalized
                 else:
                     tmp_lambda = conf.lambda_dynamic_weights
@@ -428,7 +428,7 @@ def train(
                         conf.standard_weights[k] * float((grad_norm_dyn[conf.main_loss_component_dynamic]/(grad_norm_dyn[k].clamp_min(1e-12))).cpu())
             
             for k in loss_dict: # bias correction
-                if k in ["momentum_x", "momentum_y", "aero_loss_main_shear"]:
+                if k in ["momentum_x", "momentum_y", "aero_loss_main_shear", "aero_loss_flap_shear"]:
                     tmp_lambda = conf.lambda_dynamic_weights_for_denormalized
                 else:
                     tmp_lambda = conf.lambda_dynamic_weights

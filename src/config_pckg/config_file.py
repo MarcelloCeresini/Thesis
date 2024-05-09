@@ -372,6 +372,8 @@ class Config():
             "aero_loss_main_shear": 1,
         }
         self.standard_weights["momentum_y"] = self.standard_weights["momentum_x"]
+        self.standard_weights["aero_loss_flap_pressure"] = self.standard_weights["aero_loss_main_pressure"]
+        self.standard_weights["aero_loss_flap_shear"] = self.standard_weights["aero_loss_main_shear"]
 
         self.physical_constraint_loss = True
         if self.physical_constraint_loss:
