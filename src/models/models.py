@@ -12,7 +12,7 @@ import torch_geometric.data as pyg_data
 import torch_geometric.utils as pyg_utils
 import torch_geometric.transforms as T
 
-from torch.nn import Linear, ReLU, Softplus, Tanhshrink
+from torch.nn import Linear, ReLU, Softplus, Tanhshrink, SiLU
 from torch_geometric.nn import GCNConv
 # from torch_scatter import scatter_mean
 from torch.func import functional_call, vmap, jacrev, hessian
@@ -476,9 +476,21 @@ class EPD_with_sampling(nn.Module):
 
                     tmp = self.turbolence_activation(decoded["x"][:,self.conf["idx_to_apply_activation"]])
                     decoded["x"][:,self.conf["idx_to_apply_activation"]] = tmp
-                
+            
+            if self.conf.get("divide_omega_final_value", None) is not None and self.conf.get("output_turbulence", False):
+                U_sampled["x"][:,-1] /= self.conf["divide_omega_final_value"]
+                decoded["x"][:,-1] /= self.conf["divide_omega_final_value"]
+
             return U_sampled["x"], decoded["x"]
         else:
+            if self.conf.get("activation_for_max_normalized_features",False):
+                if self.model_structure["decoder"].get("act_for_max_norm_feat", False) != False:
+                    tmp = self.turbolence_activation(decoded["x"][:,self.conf["idx_to_apply_activation"]])
+                    decoded["x"][:,self.conf["idx_to_apply_activation"]] = tmp
+
+            if self.conf.get("divide_omega_final_value", None) is not None and self.conf.get("output_turbulence", False):
+                decoded["x"][:,-1] /= self.conf["divide_omega_final_value"]
+
             return decoded["x"]
 
 
@@ -696,12 +708,14 @@ class PINN(nn.Module):
             residuals = {}
             match self.conf["PINN_mode"]:
                 case "supervised_only" | "supervised_with_sampling":
-                    physical_quantities = (u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy)
+                    physical_quantities = {"u": u, "v": v, "p": p, "u_x": u_x, "u_y": u_y, "v_x": v_x, "v_y": v_y, 
+                                            "p_x": p_x, "p_y": p_y, "u_xx": u_xx, "u_yy": u_yy, "v_xx": v_xx, "v_yy": v_yy}
                 case "continuity_only":
                     u_x = denormalize_label(u_x, "x-velocity", self.conf)
                     v_y = denormalize_label(v_y, "y-velocity", self.conf)
                     residuals.update({"continuity": (u_x + v_y)*self.conf.air_density})
-                    physical_quantities = (u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy)
+                    physical_quantities = {"u": u, "v": v, "p": p, "u_x": u_x, "u_y": u_y, "v_x": v_x, "v_y": v_y, 
+                                            "p_x": p_x, "p_y": p_y, "u_xx": u_xx, "u_yy": u_yy, "v_xx": v_xx, "v_yy": v_yy}
                 case "full_laminar":
                     u, u_x, u_y, u_xx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yy)), "x-velocity", self.conf)
                     v, v_x, v_y, v_xx, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_yy)), "y-velocity", self.conf)
@@ -709,7 +723,8 @@ class PINN(nn.Module):
                     residuals.update({"continuity": (u_x + v_y)*self.conf.air_density,
                                         "momentum_x": u*u_x + v*u_y + p_x/self.conf.air_density - (u_xx + u_yy)*self.conf.air_kinematic_viscosity,
                                         "momentum_y": u*v_x + v*v_y + p_y/self.conf.air_density - (v_xx + v_yy)*self.conf.air_kinematic_viscosity,})
-                    physical_quantities = (u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy)
+                    physical_quantities = {"u": u, "v": v, "p": p, "u_x": u_x, "u_y": u_y, "v_x": v_x, "v_y": v_y, 
+                                            "p_x": p_x, "p_y": p_y, "u_xx": u_xx, "u_yy": u_yy, "v_xx": v_xx, "v_yy": v_yy}
                 case "turbulent_kw":
                     assert self.conf["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
                     
@@ -738,9 +753,12 @@ class PINN(nn.Module):
                                         - (self.conf.air_kinematic_viscosity + k/w)*(v_xx + v_yy)
                                         - ((k_x*w - k*w_x) * v_x + (k_y*w - k*w_y) * v_y) / w**2,
                                     })
-                    physical_quantities = (u, v, p, k, w, \
-                                            u_x, u_y, v_x, v_y, p_x, p_y, k_x, k_y, w_x, w_y, \
-                                            u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy)
+                    physical_quantities = {"u": u, "v": v, "p": p, "k": k, "w": w, \
+                                            "u_x": u_x, "u_y": u_y, "v_x": v_x, "v_y": v_y, "p_x": p_x, 
+                                            "p_y": p_y, "k_x": k_x, "k_y": k_y, "w_x": w_x, "w_y": w_y, \
+                                            "u_xx": u_xx, "u_xy": u_xy, "u_yx": u_yx, "u_yy": u_yy, 
+                                            "v_xx": v_xx, "v_xy": v_xy, "v_yx": v_yx, "v_yy": v_yy,}
+                                            
                 case _:
                     raise NotImplementedError(f"{self.conf['PINN_mode']} is not implemented yet")
             
@@ -810,7 +828,7 @@ class PINN(nn.Module):
                 (x, x_mask, edge_index, edge_attr, pos, batch),
             )
             velocity_derivatives_at_B = ()
-            domain_quantities = ()
+            domain_quantities = {}
 
         if self.conf.get("bool_algebraic_continuity", False):
             ptr_cells = torch.tensor([n_cells[:i].sum() for i in range(n_cells.shape[0]+1)])
@@ -902,7 +920,7 @@ class PINN(nn.Module):
                 new_idxs[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] = \
                     idxs[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] + ptr_num_sampled[i]
                 new_faces[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] = \
-                    faces[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] +batch.ptr[i]
+                    faces[ptr_new_edges_not_shifted[i]:ptr_new_edges_not_shifted[i+1]] + batch.ptr[i]
 
             n = output_sampled_domain.shape[0]
             assert new_idxs.max()+1 == n, "Something wrong"
@@ -1010,32 +1028,67 @@ class PINN(nn.Module):
             sample_loss_dict, sample_optional_values = get_values_per_sample(
                 sample_residuals, x_additional_boundary_sliced)
             
+            for k in domain_quantities:
+                sample_optional_values[f"domain_debug_vals_{k}_mean"] = \
+                    domain_quantities[k][ptr_num_sampled[i]:ptr_num_sampled[i+1]].mean()
+                sample_optional_values[f"domain_debug_vals_{k}_std"] = \
+                    domain_quantities[k][ptr_num_sampled[i]:ptr_num_sampled[i+1]].std()
+
             for k in sample_loss_dict:
                 loss_dict[k] = loss_dict.get(k,0.) + sample_loss_dict[k]
             for k in sample_optional_values:
                 optional_values[k] = optional_values.get(k,0.) + sample_optional_values[k]
 
-        loss_dict = {k:v/batch_size for k,v in loss_dict.items()}
-        optional_values = {k:v/batch_size for k,v in optional_values.items()}
+        if self.conf.get("bool_aero_loss", False):
+            aero_loss = {}
+            cum_debug_values = {}
+            for i in range(len(batch)):
+                data = batch[i]
+                pred_supervised_pts_pressure = pred[0][batch.ptr[i]:batch.ptr[i+1], 2]
+                # assert batch.ptr.shape[0] == 2, "Check derivatives for batch size higher than 1"
 
-        momentum_percentage = (loss_dict.get("momentum_x", 0.)+loss_dict.get("momentum_y", 0.)) / loss_dict["supervised"]
-        if momentum_percentage > 1:
-            with torch.no_grad():
-                u, v, p, k, w, \
-                    u_x, u_y, v_x, v_y, p_x, p_y, k_x, k_y, w_x, w_y, \
-                    u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy = domain_quantities
-                # print((u*u_x).abs().max())
-                # print((v*u_y).abs().max())
-                # print((p_x/self.conf.air_density).abs().max())
-                # print(((self.conf.air_kinematic_viscosity + k/w)*(u_xx + u_yy)).abs().max())
-                # print((((k_x*w - k*w_x) * u_x + (k_y*w - k*w_y) * u_y) / w**2).abs().max())
+                if self.conf.flag_BC_PINN and self.conf.output_turbulence:
+                    ptr_num_sampled_boundary = torch.tensor([batch.num_boundary_sampling_points[:i].sum() 
+                        for i in range(batch.num_boundary_sampling_points.shape[0]+1)])
+                    pred_vel_derivatives = torch.stack(
+                        [p[ptr_num_sampled_boundary[i]:ptr_num_sampled_boundary[i+1]] for p in pred[2]])
+                    pred_turb_values = pred[0][batch.ptr[i]:batch.ptr[i+1], 3:]
+                    pred_coefficients, debug_values = get_coefficients(self.conf, data, pred_supervised_pts_pressure, 
+                        velocity_derivatives=pred_vel_derivatives, turbulent_values=pred_turb_values, 
+                        denormalize=True, from_boundary_sampling=True)
+                    
+
+                    if self.conf.get("use_shear_loss", False):
+                        aero_loss["main_shear"] = aero_loss.get("main_shear", 0) \
+                            + self.net.loss(pred_coefficients["main_flap"][1], data.components_coefficients["main_flap"][1])
+                        if self.conf.get("use_second_flap_loss", False):
+                            aero_loss["flap_shear"] = aero_loss.get("flap_shear", 0) \
+                            + self.net.loss(pred_coefficients["second_flap"][1], data.components_coefficients["second_flap"][1])
+
+                else:
+                    pred_coefficients, debug_values = get_coefficients(self.conf, data, pred_supervised_pts_pressure, denormalize=True)
+                
+                with torch.no_grad():
+                    for k in debug_values["main_flap"]:
+                        cum_debug_values[f"{k}_mean"] = cum_debug_values.get(f"{k}_mean", 0) + debug_values["main_flap"][k].mean()
+                        cum_debug_values[f"{k}_std"] = cum_debug_values.get(f"{k}_std", 0) + debug_values["main_flap"][k].std()
+
+                aero_loss["main_pressure"] = aero_loss.get("main_pressure", 0) \
+                    + self.net.loss(pred_coefficients["main_flap"][0], data.components_coefficients["main_flap"][0])
+                if self.conf.get("use_second_flap_loss", False):
+                    aero_loss["flap_pressure"] = aero_loss.get("flap_pressure", 0) \
+                        + self.net.loss(pred_coefficients["second_flap"][0], data.components_coefficients["second_flap"][0])
+            
+            optional_values.update({f"boundary_debug_vals_{k}": cum_debug_values[k] for k in cum_debug_values})
+            loss_dict.update({f"aero_loss_{k}": aero_loss[k] for k in aero_loss})
+
 
         if self.conf.get("normalize_denormalized_loss_components", False):
             supervised_value_lb = loss_dict["supervised"].item() * self.conf.get("minimum_continuity_relative_weight", 0)
             
             tmp = loss_dict.get("continuity", None)
             if tmp is not None and tmp != 0 and tmp < supervised_value_lb:
-                    loss_dict[k] = (supervised_value_lb) * tmp / tmp.item()
+                    loss_dict["continuity"] = (supervised_value_lb) * tmp / tmp.item()
 
             supervised_value_lb = loss_dict["supervised"].item() * self.conf.get("minimum_momentum_relative_weight", 0)
             supervised_value_ub = loss_dict["supervised"].item() * self.conf.get("maximum_momentum_relative_weight", 1e20)
@@ -1048,53 +1101,18 @@ class PINN(nn.Module):
                     elif tmp > supervised_value_ub:
                         loss_dict[k] = (supervised_value_ub) * tmp / tmp.item()
 
+            supervised_value_lb = loss_dict["supervised"].item() * self.conf.get("minimum_shear_relative_weight", 0)
+            supervised_value_ub = loss_dict["supervised"].item() * self.conf.get("maximum_shear_relative_weight", 1e20)
+            tmp = loss_dict.get("aero_loss_main_shear", None)
+            if tmp is not None and tmp != 0:
+                if tmp < supervised_value_lb:
+                    loss_dict["aero_loss_main_shear"] = (supervised_value_lb) * tmp / tmp.item()
+                elif tmp > supervised_value_ub:
+                    loss_dict["aero_loss_main_shear"] = (supervised_value_ub) * tmp / tmp.item()
 
-        if self.conf.get("bool_aero_loss", False):
-            aero_loss = {}
-            for i in range(len(batch)):
-                data = batch[i]
-                pred_supervised_pts_pressure = pred[0][batch.ptr[i]:batch.ptr[i+1], 2]
-                # assert batch.ptr.shape[0] == 2, "Check derivatives for batch size higher than 1"
 
-                if self.conf.flag_BC_PINN and self.conf.output_turbulence:
-                    ptr_num_sampled_boundary = torch.tensor([batch.num_boundary_sampling_points[:i].sum() 
-                        for i in range(batch.num_boundary_sampling_points.shape[0]+1)])
-                    pred_vel_derivatives = torch.stack(
-                        [p[ptr_num_sampled_boundary[i]:ptr_num_sampled_boundary[i+1]] for p in pred[2]])
-                    pred_turb_values = pred[0][batch.ptr[i]:batch.ptr[i+1], 3:]
-                    pred_coefficients = get_coefficients(self.conf, data, pred_supervised_pts_pressure, 
-                        velocity_derivatives=pred_vel_derivatives, turbulent_values=pred_turb_values, 
-                        denormalize=True, from_boundary_sampling=True)
-                    
-                    aero_loss["main_shear"] = aero_loss.get("main_shear", 0) \
-                        + self.net.loss(pred_coefficients["main_flap"][1], data.components_coefficients["main_flap"][1])
-                else:
-                    pred_coefficients = get_coefficients(self.conf, data, pred_supervised_pts_pressure, denormalize=True)
-            
-                aero_loss["main_pressure"] = aero_loss.get("main_pressure", 0) \
-                    + self.net.loss(pred_coefficients["main_flap"][0], data.components_coefficients["main_flap"][0])
-                
-            loss_dict.update({f"aero_loss_{k}": aero_loss[k]/batch_size for k in aero_loss})
-        
-
-        # for k in residuals:
-        #     if "debug_only_" in k:
-        #         with torch.no_grad():
-        #             k_to_log = k.removeprefix("debug_only_")
-        #             tmp = residuals[k][residuals[k].nonzero()].abs().mean()
-        #             optional_values[k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
-        #             tmp_dict = {}
-        #             for comp in set(self.conf.graph_node_features_not_for_training).difference([
-        #                     "component_id", "is_car", "is_flap", "is_tyre"]):
-        #                 correct_idxs = data.x_additional_boundary[:,self.conf.graph_node_features_not_for_training[comp]] == 1
-        #                 tmp = residuals[k][correct_idxs].abs().mean()
-                        
-        #                 optional_values[comp+"_"+k_to_log] = tmp if not tmp.isnan() else torch.tensor(0.)
-        #                 tmp_dict[k_to_log] = optional_values[comp+"_"+k_to_log]
-        #             optional_values[comp+"_total"] = sum(tmp_dict.values())
-        #     else:
-        #         loss_dict[k] = residuals[k].abs().mean()
-
+        loss_dict = {k:v/batch_size for k,v in loss_dict.items()}
+        optional_values = {k:v/batch_size for k,v in optional_values.items()}
         return sum(loss_dict.values()), loss_dict, optional_values
 
 

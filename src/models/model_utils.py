@@ -4,7 +4,7 @@ from typing import Optional
 import torch.nn as nn
 import torch_geometric.nn as pyg_nn
 
-from torch.nn import Linear, ReLU, Sequential, LeakyReLU, Softplus, Tanhshrink
+from torch.nn import Linear, ReLU, Sequential, LeakyReLU, Softplus, Tanhshrink, SiLU
 from torch_geometric.nn import GCNConv, NNConv
 from math import ceil
 
@@ -42,6 +42,9 @@ def get_obj_from_structure(
                     return in_channels, obj
                 case "Tanhshrink":
                     obj = Tanhshrink()
+                    return in_channels, obj
+                case "SiLU":
+                    obj = SiLU()
                     return in_channels, obj
                 case _:
                     raise NotImplementedError()
@@ -218,7 +221,7 @@ def forward_for_general_layer(layer, X_dict: dict):
                 edge_attr=  X_dict["edge_attr"],
             )
             return {"x": x}
-        case Sequential() | Linear() | ReLU() | LeakyReLU():
+        case Sequential() | Linear() | ReLU() | LeakyReLU() | SiLU():
             if "x" in X_dict.keys():
                 return {"x": layer(X_dict["x"])}
             elif "edge_attr" in X_dict.keys():

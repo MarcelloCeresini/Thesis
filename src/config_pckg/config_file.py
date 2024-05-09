@@ -311,6 +311,8 @@ class Config():
         
         self.bool_algebraic_continuity = True
         self.bool_aero_loss: bool = True
+        self.use_shear_loss: bool = False # DO NOT USE, it's broken
+        self.use_second_flap_loss: bool = True
         self.output_turbulence: bool = True
         if self.PINN_mode == "turbulent_kw" and not self.output_turbulence:
             print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
@@ -381,16 +383,20 @@ class Config():
         self.normalize_denormalized_loss_components = False
         # these weights are wrt the supervised part
         self.minimum_continuity_relative_weight = 0.01
-        self.minimum_momentum_relative_weight = 0.01
-        self.maximum_momentum_relative_weight = 0.5
+        self.minimum_momentum_relative_weight = 0.1
+        self.maximum_momentum_relative_weight = 10
+        self.minimum_shear_relative_weight = 0.1
+        self.maximum_shear_relative_weight = 10
 
         self.dynamic_loss_weights = True
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"
         self.main_loss_component_dynamic = "supervised"
         # https://iopscience.iop.org/article/10.1088/2399-6528/ace416/pdf
         self.lambda_dynamic_weights = 0.01 # (0.1 in NSFnets arXiv:2003.06496v1)
+        self.lambda_dynamic_weights_for_denormalized = 0.00001 # (0.1 in NSFnets arXiv:2003.06496v1)
         self.gamma_loss = 10
 
+        self.divide_omega_final_value = 100.
         self.gradient_clip_value = 1
         self.gradient_clip_value_norm = 1 # ~ initial norm in a training
         self.maximum_grad_value = 0.01 # after lr

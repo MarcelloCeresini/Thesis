@@ -647,10 +647,11 @@ def get_coefficients_for_component(
         denormalize,
         from_boundary_sampling):
     
+    debug_values = {}
     slice = data.x_additional[:, conf.graph_node_features_not_for_training[slice_str]].nonzero()[:,0]
 
     if slice.shape[0] == 0:
-        return torch.tensor((0., 0.), device=slice.device), torch.tensor((0., 0.), device=slice.device)
+        return torch.tensor((0., 0.), device=slice.device), torch.tensor((0., 0.), device=slice.device), {}
     
     pressure_values = torch.clone(pressure_values[slice])
     inward_normal_areas = data.inward_normal_areas[slice]
@@ -713,11 +714,16 @@ def get_coefficients_for_component(
         x_comp =     2*u_x*n_x + (v_x+u_y)*n_y
         y_comp = (u_y+v_x)*n_x +     2*v_y*n_y
 
+        
         viscosity = (conf.air_kinematic_viscosity + k/w).view(-1,1).repeat(1,2)
 
+        debug_values.update({"u_x": u_x, "u_y": u_y, "v_x": v_x, "v_y": v_y, "k": k, "w": w, 
+                                "limC": tmp, "x_comp": x_comp, "y_comp": y_comp, "visc": viscosity})
+        
         shear_forces = torch.sum(2*viscosity*torch.stack((x_comp, y_comp)).T, dim=0)
     
-    return pressure_forces/conf.dynamic_pressure, shear_forces/conf.dynamic_pressure
+    debug_values.update({"p": pressure_values})
+    return pressure_forces/conf.dynamic_pressure, shear_forces/conf.dynamic_pressure, debug_values
     
 
 def get_coefficients(
@@ -729,13 +735,18 @@ def get_coefficients(
         denormalize=False,
         from_boundary_sampling=False):
 
-    return_dict = {k: get_coefficients_for_component(
-                        conf, data, k, pressure_values, 
-                        velocity_derivatives, turbulent_values,
-                        denormalize, from_boundary_sampling)
-                    for k in conf.car_parts_for_coefficients}   
+    return_dict = {}
+    debug_dict = {}
+    for k in conf.car_parts_for_coefficients:
+        tmp = get_coefficients_for_component(
+            conf, data, k, pressure_values, 
+            velocity_derivatives, turbulent_values,
+            denormalize, from_boundary_sampling)
+        
+        return_dict[k] = (tmp[0], tmp[1])
+        debug_dict[k] = tmp[2]
 
-    return return_dict
+    return return_dict, debug_dict
 
 
 class MeshCompleteInfo:
@@ -1703,7 +1714,7 @@ def convert_mesh_complete_info_obj_to_graph(
                 cell_center_positions=meshCI.cell_center_positions,
                 face_center_positions=meshCI.face_center_positions,)
 
-            data.components_coefficients = get_coefficients(conf, data, pressure_values=data.y[:,2],
+            data.components_coefficients, _ = get_coefficients(conf, data, pressure_values=data.y[:,2],
                 velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
             data.CcFc_edges = torch.tensor(meshCI.CcFc_edges) # useful for sampling inside cells
             

@@ -4,7 +4,7 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules import Module
-from torch.nn import Linear, ReLU, Sequential, LeakyReLU, Softplus
+from torch.nn import Linear, ReLU, Sequential, LeakyReLU, Softplus, SiLU
 
 import torch_geometric.nn as pyg_nn
 import torch_geometric.data as pyg_data

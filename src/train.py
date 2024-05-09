@@ -106,11 +106,11 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                     pred_vel_derivatives = torch.stack(
                         [p[ptr_num_sampled_boundary[i]:ptr_num_sampled_boundary[i+1]] for p in pred[2]])
                     pred_turb_values = pred[0][batch.ptr[i]:batch.ptr[i+1], 3:]
-                    pred_coefficients = get_coefficients(conf, data, pred_supervised_pts_pressure, 
+                    pred_coefficients, debug_values = get_coefficients(conf, data, pred_supervised_pts_pressure, 
                         velocity_derivatives=pred_vel_derivatives, turbulent_values=pred_turb_values, 
                         denormalize=True, from_boundary_sampling=True)
                 else:
-                    pred_coefficients = get_coefficients(conf, data, pred_supervised_pts_pressure, denormalize=True)
+                    pred_coefficients, debug_values = get_coefficients(conf, data, pred_supervised_pts_pressure, denormalize=True)
                 
                 metric_aero.forward(pred=pred_coefficients,
                                     label=data.components_coefficients)
@@ -261,21 +261,24 @@ def train(
                 if conf.dynamic_loss_weights:
                     assert conf.main_loss_component_dynamic in loss_dict, f"{conf.main_loss_component_dynamic} not in loss_dict keys: {list(loss_dict.keys())}"
                     if not conf.parallel_dynamic_weights:
-                        gradients = {}
+                        gradients_for_loss = {}
                         for k in loss_dict:
                             loss_dict[k].backward(retain_graph=True)
-                            gradients[k] = {}
+                            gradients_for_loss[k] = {}
                             for name, param in model.named_parameters():
                                 if isinstance(param.grad, torch.Tensor):
-                                    gradients[k][name] = gradients[k].get(name, 0) + param.grad
+                                    gradients_for_loss[k][name] = gradients_for_loss[k].get(name, 0) + param.grad
                             opt.zero_grad(set_to_none=True)
                             
                     for k in loss_dict:
                         grad_norm_dyn[k] = grad_norm_dyn.get(k, 0) \
-                            + torch.cat([v.view(-1) for v in gradients[k].values()]).norm()
+                            + torch.cat([v.view(-1) for v in gradients_for_loss[k].values()]).norm()
                     
+                    # print(list(gradients_for_loss.keys()))
+                    # print(list(loss_weights.keys()))
+                    # print(list(loss_dict.keys()))
                     for name, param in model.named_parameters():
-                        total_grad = sum([gradients[k].get(name, 0)*loss_weights[k] for k in gradients])
+                        total_grad = sum([gradients_for_loss[k].get(name, 0.)*loss_weights[k] for k in loss_dict])
                         if isinstance(total_grad, torch.Tensor):
                             param.grad = total_grad
 
@@ -412,15 +415,24 @@ def train(
             wandb.log({f"weight_{k}":v for k,v in loss_weights.items()}, epoch)
             wandb.log({f"reweighted_{k}":v for k,v in total_loss_dict_reweighted.items()}, epoch)
 
+            
             for k in loss_dict:
+                if k in ["momentum_x", "momentum_y", "aero_loss_main_shear"]: # different lambdas for unstable components
+                    tmp_lambda = conf.lambda_dynamic_weights_for_denormalized
+                else:
+                    tmp_lambda = conf.lambda_dynamic_weights
                 loss_weights_uncorrected[k] = \
-                    (1-conf.lambda_dynamic_weights) * \
+                    (1-tmp_lambda) * \
                         loss_weights_uncorrected[k] + \
-                    conf.lambda_dynamic_weights     * \
+                    tmp_lambda     * \
                         conf.standard_weights[k] * float((grad_norm_dyn[conf.main_loss_component_dynamic]/(grad_norm_dyn[k].clamp_min(1e-12))).cpu())
             
             for k in loss_dict: # bias correction
-                loss_weights[k] = loss_weights_uncorrected[k] / (1 - (1-conf.lambda_dynamic_weights)**counter_dynamic_loss)
+                if k in ["momentum_x", "momentum_y", "aero_loss_main_shear"]:
+                    tmp_lambda = conf.lambda_dynamic_weights_for_denormalized
+                else:
+                    tmp_lambda = conf.lambda_dynamic_weights
+                loss_weights[k] = loss_weights_uncorrected[k] / (1 - (1-tmp_lambda)**counter_dynamic_loss)
             
             if conf.get("physical_constraint_loss", False):
                 loss_weights["negative_k"] = min(loss_weights["negative_k"], loss_weights["supervised"])

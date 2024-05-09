@@ -41,29 +41,29 @@ message_passer:
   add_global_info: True
   add_BC_info: True
   skip: True
-  standard_activation: Softplus
+  standard_activation: SiLU
   aggr: mean
   nn: # takes as input edge_features (and does NOT update them, always gets edge features)
     type: sequential_model
     layers: 
       - {type: layer, name: Linear, out_features: 32}
-      - {type: layer, name: Softplus}
+      - {type: layer, name: SiLU}
       # Last (Linear) layer for internal_mlp is always added autonomously
   nn_update:
     type: sequential_model
     layers: 
       - {type: layer, name: Linear, out_features: 32}
-      - {type: layer, name: Softplus}
+      - {type: layer, name: SiLU}
   nn_edges:
     type: sequential_model
     layers: 
       - {type: layer, name: Linear, out_features: 8}
-      - {type: layer, name: Softplus}
+      - {type: layer, name: SiLU}
 
 new_edges_mlp:
   add_global_info: True
   add_BC_info: True
-  standard_activation: Softplus
+  standard_activation: SiLU
   msg_mlp:
     type: sequential_model
     layers: 
@@ -73,7 +73,7 @@ new_edges_mlp:
 
 decoder:
   type: sequential_model
-  act_for_max_norm_feat: Tanhshrink # Sigmoid, ReLU, Softplus, Tanhshrink
+  act_for_max_norm_feat: Tanhshrink # Sigmoid, ReLU, Softplus, Tanhshrink, SiLU
   layers: 
     # - {type: layer, name: Linear, out_features: 128}
     # - {type: layer, name: Softplus}
