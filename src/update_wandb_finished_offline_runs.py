@@ -13,36 +13,34 @@ good_runs = [
     # "kylpiqqd", # apricot-deluge-52
     # "p68fr2sa", # worldy-music-55
     # "i6a0k4ca", # misty-feather-62
-    "0egkpy0z", # olive-star-63
-    "iugv186w", #pious-plant-64
-
+    # "0egkpy0z", # olive-star-63
+    # "iugv186w", #pious-plant-64
+    # "peh0csfv", # lucky-snow-65
+    # "qqxymndp", # icy-firefly-66
+    # "8tfcp71w", # misty-bird-73
+    
 ]
+
+UPDATE_TEST_VALUES = True
+UPDATE_METRIC_MIN = False
 
 def update_summary(run_id):
     run = api.run(f"marcelloceresini/Thesis/{run_id}")
     tmp_summary = {}
     i=0
     metric_list = []
+
     for row in run.scan_history():
-        # print(i)
-        # i+=1
-        # summary.update(row)
-        # summary.update({k:v for k, v in row.items() if v is not None})
         for k,v in row.items():
-            if "test" in k:
+            if "test" in k and UPDATE_TEST_VALUES:
                 if v is not None:
                     tmp_summary.update({k: v})
-            if "metric" == k:
+            if "metric" == k and UPDATE_METRIC_MIN:
                 if v is not None:
                     metric_list.append(v)
-        #     if isinstance(v, Union[str|float|int]):
-        #         summary.update({k: v})
-        #     if "metric" in k:
-        #         pass
-        #     if "min" in k:
-        #         pass
 
-    tmp_summary["metric"] = {"min":min(metric_list)}
+    if UPDATE_METRIC_MIN:
+        tmp_summary["metric"] = {"min":min(metric_list)}
     # print(list(run.summary._dict.keys()))
     run.summary.update(tmp_summary)
 

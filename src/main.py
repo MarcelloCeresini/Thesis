@@ -27,7 +27,7 @@ def print_w_time(str):
 if __name__ == "__main__":
 
     WANDB_MODE: Literal["online", "offline"] = "online"
-
+    SKIP_IN_DEBUG = True
     gettrace = getattr(sys, 'gettrace', None)
     if gettrace is not None:
         if gettrace():
@@ -93,7 +93,8 @@ if __name__ == "__main__":
     # print(model_summary)
 
     print_w_time("TRAINING")
-    model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name, trigger_sync=trigger_sync, loss_keys_list=loss_keys_list)
+    model = train(model, train_dataloader, val_dataloader, dataloader_train_for_metrics, conf, run_name, 
+                  trigger_sync=trigger_sync, loss_keys_list=loss_keys_list, SKIP_IN_DEBUG=SKIP_IN_DEBUG)
 
     print_w_time("SAVING MODEL")
     if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_runs")):
@@ -114,7 +115,8 @@ if __name__ == "__main__":
 
         wandb.log(metric_results)
 
-        plot_test_images_from_model(conf, model, run_name, test_dataloader)
+        if not conf.get("CLUSTER", False):
+            plot_test_images_from_model(conf, model, run_name, test_dataloader)
 
     if trigger_sync is not None:
         trigger_sync()

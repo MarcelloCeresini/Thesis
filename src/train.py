@@ -2,6 +2,7 @@ from copy import deepcopy
 import copy
 import os
 from typing import Literal, Optional
+import numpy as np
 from tqdm import tqdm
 from datetime import datetime
 import sys
@@ -49,7 +50,9 @@ def write_metric_results(metric_results, writer, epoch, split="val") -> None:
             writer.add_scalar(metric_name, metric_res_subdict, epoch)
 
 
-def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
+def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}, **kwargs):
+    SKIP_IN_DEBUG = kwargs.get("SKIP_IN_DEBUG", True)
+
     metric_dict = deepcopy(conf["metric_dict"])
     for metric_name in metric_dict:
         metric_dict[metric_name] = {k:eval(v)() for k,v in metric_dict[metric_name].items()}
@@ -75,7 +78,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
                 loss_dict = {k:v*conf["standard_weights"].get(k,1) for k,v in loss[1].items()}
                 optional_values = {k:v for k,v in loss[2].items()}
 
-                for k in loss_dict: 
+                for k in loss_dict:
                     total_loss_dict[k] = total_loss_dict.get(k, 0) + \
                                             loss_dict[k].item()*batch.num_graphs
                 for k in optional_values:
@@ -118,7 +121,7 @@ def test(loader: pyg_data.DataLoader, model, conf, loss_weights: dict={}):
             batch.cpu()
 
             gettrace = getattr(sys, 'gettrace', None)
-            if gettrace is not None:
+            if gettrace is not None and SKIP_IN_DEBUG:
                 if gettrace():
                     print('Hmm, Big Debugger is watching me --> breaking in TEST')
                     break
@@ -155,6 +158,7 @@ def train(
     
     trigger_sync: Optional[TriggerWandbSyncHook] = kwargs.get("trigger_sync", None)
     loss_keys_list: Optional[dict] = kwargs.get("loss_keys_list", None)
+    SKIP_IN_DEBUG = kwargs.get("SKIP_IN_DEBUG", True)
 
     if not os.path.isdir(os.path.join(conf["DATA_DIR"], "model_checkpoints")):
         os.mkdir(os.path.join(conf["DATA_DIR"], "model_checkpoints"))
@@ -263,6 +267,10 @@ def train(
                     if not conf.parallel_dynamic_weights:
                         gradients_for_loss = {}
                         for k in loss_dict:
+                            if "loss_flap" in k and not loss_dict[k].requires_grad:
+                                continue
+                            if not loss_dict[k].requires_grad:
+                                print(f"NANS DETECTED: k = {k}")
                             loss_dict[k].backward(retain_graph=True)
                             gradients_for_loss[k] = {}
                             for name, param in model.named_parameters():
@@ -270,7 +278,7 @@ def train(
                                     gradients_for_loss[k][name] = gradients_for_loss[k].get(name, 0) + param.grad
                             opt.zero_grad(set_to_none=True)
                             
-                    for k in loss_dict:
+                    for k in gradients_for_loss:
                         grad_norm_dyn[k] = grad_norm_dyn.get(k, 0) \
                             + torch.cat([v.view(-1) for v in gradients_for_loss[k].values()]).norm()
                     
@@ -278,7 +286,7 @@ def train(
                     # print(list(loss_weights.keys()))
                     # print(list(loss_dict.keys()))
                     for name, param in model.named_parameters():
-                        total_grad = sum([gradients_for_loss[k].get(name, 0.)*loss_weights[k] for k in loss_dict])
+                        total_grad = sum([gradients_for_loss[k].get(name, 0.)*loss_weights[k] for k in gradients_for_loss])
                         if isinstance(total_grad, torch.Tensor):
                             param.grad = total_grad
 
@@ -333,7 +341,7 @@ def train(
 
             total_loss += loss.item() * batch.num_graphs
             gettrace = getattr(sys, 'gettrace', None)
-            if gettrace is not None:
+            if gettrace is not None and SKIP_IN_DEBUG:
                 if gettrace():
                     print('Hmm, Big Debugger is watching me --> breaking in TRAIN')
                     break
@@ -364,7 +372,7 @@ def train(
         if epoch % conf["hyper_params"]["val"]["n_epochs_val"] == 0:
             # clean gpu for validation (we want to fill it up only for training)
             torch.cuda.empty_cache()
-            val_loss, metric_results = test(val_loader, model, conf, loss_weights)
+            val_loss, metric_results = test(val_loader, model, conf, loss_weights, SKIP_IN_DEBUG=SKIP_IN_DEBUG)
             torch.cuda.empty_cache()
 
             metric = sum([metric_results["MAE"][k] for k in conf.physical_labels])
@@ -388,7 +396,7 @@ def train(
 
             # clean gpu for validation (we want to fill it up only for training)
             torch.cuda.empty_cache()
-            train_standard_loss, train_metric_results = test(dataloader_train_for_metrics, model, conf, loss_weights)
+            train_standard_loss, train_metric_results = test(dataloader_train_for_metrics, model, conf, loss_weights, SKIP_IN_DEBUG=SKIP_IN_DEBUG)
             torch.cuda.empty_cache()
             train_standard_metric = sum([metric_results["MAE"][k] for k in conf.physical_labels])
 
@@ -421,17 +429,30 @@ def train(
                     tmp_lambda = conf.lambda_dynamic_weights_for_denormalized
                 else:
                     tmp_lambda = conf.lambda_dynamic_weights
-                loss_weights_uncorrected[k] = \
-                    (1-tmp_lambda) * \
-                        loss_weights_uncorrected[k] + \
-                    tmp_lambda     * \
-                        conf.standard_weights[k] * float((grad_norm_dyn[conf.main_loss_component_dynamic]/(grad_norm_dyn[k].clamp_min(1e-12))).cpu())
-            
+
+                if grad_norm_dyn.get(k, False):
+                    successive_loss_weights_uncorrected = \
+                        (1-tmp_lambda) * \
+                            loss_weights_uncorrected[k] + \
+                        tmp_lambda     * \
+                            conf.standard_weights[k] * float((grad_norm_dyn[conf.main_loss_component_dynamic]/(grad_norm_dyn[k].clamp_min(1e-12))).cpu())
+                    
+                    if loss_weights_uncorrected[k] != 0:
+                        change_rate = successive_loss_weights_uncorrected/(np.clip(loss_weights_uncorrected[k], 1e-12, None))
+                        loss_weights_uncorrected[k] *= np.clip(change_rate, 1/10., 10.)
+                    else:
+                        loss_weights_uncorrected[k] = successive_loss_weights_uncorrected
+
+
+                else: # for the flaps, it could happen that there is no grad_norm_dyn because not all the meshes have them
+                    # so we simply do nothing and the weight remains the same
+                    pass
             for k in loss_dict: # bias correction
                 if k in ["momentum_x", "momentum_y", "aero_loss_main_shear", "aero_loss_flap_shear"]:
                     tmp_lambda = conf.lambda_dynamic_weights_for_denormalized
                 else:
                     tmp_lambda = conf.lambda_dynamic_weights
+                
                 loss_weights[k] = loss_weights_uncorrected[k] / (1 - (1-tmp_lambda)**counter_dynamic_loss)
             
             if conf.get("physical_constraint_loss", False):

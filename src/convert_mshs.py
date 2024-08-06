@@ -140,11 +140,13 @@ if __name__ == "__main__":
         #     velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
         # pass
         data = copy.copy(torch.load(path_g))
-        tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
-        data.faces_in_cell = torch.nn.utils.rnn.pad_sequence(
-            tmp, 
-            padding_value=-1
-        ).T
+        omega = data.y[...,4] / (0.09*data.y[...,3])
+        data.y[...,4] = omega
+        # tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
+        # data.faces_in_cell = torch.nn.utils.rnn.pad_sequence(
+        #     tmp, 
+        #     padding_value=-1
+        # ).T
         # data.n_cells = data.len_faces.shape[0]
         torch.save(data, path_g)
     # df_errors.to_csv(os.path.join(conf.DATA_DIR, "relative_errors.csv"))

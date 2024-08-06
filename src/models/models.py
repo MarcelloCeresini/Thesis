@@ -1,7 +1,6 @@
 import copy
 from inspect import getfullargspec
 from typing import Literal, Optional
-import numpy as np
 
 import torch
 import torch.nn as nn
@@ -12,14 +11,16 @@ import torch_geometric.data as pyg_data
 import torch_geometric.utils as pyg_utils
 import torch_geometric.transforms as T
 
-from torch.nn import Linear, ReLU, Softplus, Tanhshrink, SiLU
+from torch.nn import Linear, ReLU, Softplus, Tanhshrink, SiLU, Sigmoid
 from torch_geometric.nn import GCNConv
 # from torch_scatter import scatter_mean
 from torch.func import functional_call, vmap, jacrev, hessian
 
-from scipy.spatial import Delaunay
-from scipy.interpolate import LinearNDInterpolator
+# from scipy.spatial import Delaunay
+# from scipy.interpolate import LinearNDInterpolator
 import pyvista
+import numpy as np
+from scipy.special import btdtr as beta_cdf
 
 from config_pckg.config_file import Config 
 from loss_pckg.losses import MSE_loss
@@ -158,7 +159,6 @@ class EncodeProcessDecode_Baseline(nn.Module):
             "pos":          pos,
             "batch":        batch,
         }
-        # edge_attr is 3d relative distance between nodes + the norm (4 columns)
 
         # Encode features
         tmp = forward_for_general_layer(self.encoder, X)
@@ -293,9 +293,7 @@ class EPD_with_sampling(nn.Module):
         if self.conf.get("bool_bootstrap_bias",False):
             init_bias = torch.zeros_like(self.decoder[-1].bias)
             for i, (k, value) in enumerate(self.conf["bootstrap_bias"].items()):
-                init_bias[i] = normalize_label(value, k, 
-                    self.conf.label_normalization_mode, self.conf.dict_labels_train, 
-                    self.conf.air_speed, self.conf.Q)
+                init_bias[i] = normalize_label(value, k, self.conf)
             with torch.no_grad():
                 self.decoder[-1].bias = nn.Parameter(init_bias.to(torch.float32))
 
@@ -477,9 +475,13 @@ class EPD_with_sampling(nn.Module):
                     tmp = self.turbolence_activation(decoded["x"][:,self.conf["idx_to_apply_activation"]])
                     decoded["x"][:,self.conf["idx_to_apply_activation"]] = tmp
             
-            if self.conf.get("divide_omega_final_value", None) is not None and self.conf.get("output_turbulence", False):
-                U_sampled["x"][:,-1] /= self.conf["divide_omega_final_value"]
-                decoded["x"][:,-1] /= self.conf["divide_omega_final_value"]
+            if self.conf.get("divide_omega_final_value", False) and self.conf.get("output_turbulence", False):
+                U_sampled["x"][...,4] = U_sampled["x"][...,4].divide(self.conf["divide_omega_final_value"])
+                decoded["x"][...,4] = decoded["x"][...,4].divide(self.conf["divide_omega_final_value"])
+
+            if self.conf.get("multimodal_turbolence", False): # multimodal turbolence
+                U_sampled["x"][...,5] = Sigmoid(U_sampled["x"][...,5])
+                decoded["x"][...,5] = Sigmoid(decoded[...,5])
 
             return U_sampled["x"], decoded["x"]
         else:
@@ -488,13 +490,18 @@ class EPD_with_sampling(nn.Module):
                     tmp = self.turbolence_activation(decoded["x"][:,self.conf["idx_to_apply_activation"]])
                     decoded["x"][:,self.conf["idx_to_apply_activation"]] = tmp
 
-            if self.conf.get("divide_omega_final_value", None) is not None and self.conf.get("output_turbulence", False):
-                decoded["x"][:,-1] /= self.conf["divide_omega_final_value"]
+            if self.conf.get("divide_omega_final_value", False) and self.conf.get("output_turbulence", False):
+                decoded["x"][...,4] = decoded["x"][...,4].divide(self.conf["divide_omega_final_value"])
+
+            if self.conf.get("multimodal_turbolence", False): # multimodal turbolence
+                decoded["x"][...,5] = Sigmoid(decoded[...,5])
 
             return decoded["x"]
 
 
     def loss(self, pred: torch.Tensor, label: torch.Tensor, ptr: Optional[torch.Tensor]=None):
+        pred = pred.to(torch.float32)
+        label = label.to(torch.float32)
         if ptr is None:
             return self.loss_fn(pred, label)
         else:
@@ -653,7 +660,11 @@ class PINN(nn.Module):
                 (x, x_mask, edge_index, edge_attr, pos, batch, 
                     sampling_points, new_edges, new_edge_attributes, batch_sampling_points),
             )
-            return out_samp, (out_samp, out_sup)
+
+            if self.conf.get("multimodal_turbolence", False): # don't want to derive wrt the sigmoid activation
+                return out_samp[...,:-1], (out_samp, out_sup)
+            else:
+                return out_samp, (out_samp, out_sup)
 
 
         def compute_first_derivative(sampling_points, new_edges, batch_sampling_points):
@@ -695,7 +706,7 @@ class PINN(nn.Module):
                         u_xx, u_xy, u_yx, u_yy, v_xx, v_xy, v_yx, v_yy
 
 
-        def get_domain_residuals(slice_idxs, hess_samp, grads_samp, out_samp):
+        def get_domain_residuals(slice_idxs, hess_samp, grads_samp, out_samp, turbolence_mask):
             if not "turbulent_kw" in self.conf["PINN_mode"]:
                 u, v, p, u_x, u_y, v_x, v_y, p_x, p_y, u_xx, u_yy, v_xx, v_yy = get_correct_slice(
                     slice_idxs, hess_samp, grads_samp, out_samp, turbolence=False)
@@ -727,32 +738,55 @@ class PINN(nn.Module):
                                             "p_x": p_x, "p_y": p_y, "u_xx": u_xx, "u_yy": u_yy, "v_xx": v_xx, "v_yy": v_yy}
                 case "turbulent_kw":
                     assert self.conf["output_turbulence"], "Cannot use turbolent equations if you don't output turbulence"
-                    
-                    # OSS: before denormalization, otherwise the values are crazy
-                    if self.conf.get("physical_constraint_loss", False) and self.conf.PINN_mode == "turbulent_kw":
-                        residuals["negative_k"] = torch.clamp_max(k, 0.)
-                        residuals["negative_w"] = torch.clamp_max(w, 0.)
-                    
                     u, u_x, u_y, u_xx, u_yx, u_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((u, u_x, u_y, u_xx, u_yx, u_yy)), "x-velocity", self.conf)
                     v, v_x, v_y, v_xx, v_xy, v_yy = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((v, v_x, v_y, v_xx, v_xy, v_yy)), "y-velocity", self.conf)
                     p_x, p_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((p_x, p_y)), "pressure", self.conf)
                     k, k_x, k_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((k, k_x, k_y)), "turb-kinetic-energy", self.conf)
                     w, w_x, w_y = vmap(denormalize_label, in_dims=(0,None,None))(torch.stack((w, w_x, w_y)), "turb-diss-rate", self.conf)
 
+                    # OSS: cannot go before denormalization if you use something that shifts the mean
+                    if self.conf.get("physical_constraint_loss", False) and self.conf.PINN_mode == "turbulent_kw":
+                        residuals["negative_k"] = torch.clamp_max(k, 0.)
+                        residuals["negative_w"] = torch.clamp_max(w, 0.)
+
                     k = torch.clamp_min(k, 0.)
                     # reference for the clipping https://doi.org/10.2514/1.36541
                     tmp = self.conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/self.conf.beta_star_w)
-                    w = torch.maximum(w, tmp)
+                    w = torch.maximum(w, tmp) # avoids small omega
                     
-                    residuals.update({
+                    turbolent_residuals = {
                         "continuity": (u_x + v_y)*self.conf.air_density,
                         "momentum_x": u*u_x + v*u_y + p_x/self.conf.air_density 
                                         - (self.conf.air_kinematic_viscosity + k/w)*(u_xx + u_yy) 
                                         - ((k_x*w - k*w_x) * u_x + (k_y*w - k*w_y) * u_y) / w**2,
                         "momentum_y": u*v_x + v*v_y + p_y/self.conf.air_density
                                         - (self.conf.air_kinematic_viscosity + k/w)*(v_xx + v_yy)
-                                        - ((k_x*w - k*w_x) * v_x + (k_y*w - k*w_y) * v_y) / w**2,
-                                    })
+                                        - ((k_x*w - k*w_x) * v_x + (k_y*w - k*w_y) * v_y) / w**2,}
+                    
+                    if turbolence_mask is None:
+                        residuals.update(turbolent_residuals)
+                    else:
+                        laminar_residuals = {
+                            "continuity": (u_x + v_y)*self.conf.air_density,
+                            "momentum_x": u*u_x + v*u_y + p_x/self.conf.air_density 
+                                        - (u_xx + u_yy)*self.conf.air_kinematic_viscosity,
+                            "momentum_y": u*v_x + v*v_y + p_y/self.conf.air_density
+                                        - (v_xx + v_yy)*self.conf.air_kinematic_viscosity,}
+                        complete_residuals = {}
+                        # Like a temperature parameter to shift output in [0,1] more toward extremes
+                        # With a=b=1 it's the identity. x must be in [0,1] (and it should be the output of the sigmoid)
+                        # Ideally it's symmetric, so b=a
+                        turbolence_mask = beta_cdf(
+                            a = self.conf.get("multimodal_beta_a", 1),
+                            b = self.conf.get("multimodal_beta_b", self.conf.get("multimodal_beta_a", 1)),
+                            x = turbolence_mask)
+                        
+                        for k in turbolent_residuals:
+                            complete_residuals[k] = turbolence_mask*turbolent_residuals[k] \
+                                + (1-turbolence_mask)*laminar_residuals[k]
+                        
+                        residuals.update(complete_residuals)
+                        
                     physical_quantities = {"u": u, "v": v, "p": p, "k": k, "w": w, \
                                             "u_x": u_x, "u_y": u_y, "v_x": v_x, "v_y": v_y, "p_x": p_x, 
                                             "p_y": p_y, "k_x": k_x, "k_y": k_y, "w_x": w_x, "w_y": w_y, \
@@ -799,8 +833,8 @@ class PINN(nn.Module):
             )
             #####################################################################################
             
-            # if (tmp := torch.isnan(hess_samp).sum()) > 0:
-            #     print(f"hess_samp - {tmp} NaNs")
+            if (tmp := torch.isnan(hess_samp).sum()) > 0:
+                print(f"hess_samp - {tmp} NaNs")
             if (tmp := torch.isnan(grads_samp).sum()) > 0:
                 print(f"grads_samp - {tmp} NaNs")
             if (tmp := torch.isnan(out_samp).sum()) > 0:
@@ -808,8 +842,15 @@ class PINN(nn.Module):
             if (tmp := torch.isnan(out_sup).sum()) > 0:
                 print(f"out_sup - {tmp} NaNs")
 
+            if self.conf.get("multimodal_turbolence", False) and self.conf.get("output_turbulence", False):
+                assert out_sup.shape[-1] == out_samp.shape[-1] == grads_samp.shape[-1] - 1, "You shouldn't derive the sigmoid activation"
+                turbolence_mask = out_samp[...,-1]
+                out_samp = out_samp[...,:-1]
+            else:
+                turbolence_mask = None
+
             # for both domain and boundary residuals, batch is not important because it's a node-wise calculation
-            domain_res, domain_quantities = get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp)
+            domain_res, domain_quantities = get_domain_residuals(domain_slice, hess_samp, grads_samp, out_samp, turbolence_mask)
             residuals.update(domain_res)
             
             boundary_residuals, velocity_derivatives_at_B = get_boundary_residuals(boundary_slice, hess_samp, grads_samp, out_samp)
@@ -905,6 +946,7 @@ class PINN(nn.Module):
         output_sampled_domain = residuals.pop("output_sampled_domain", None)
         if output_sampled_domain is not None:
             device = output_sampled_domain.device
+            output_sampled_domain = output_sampled_domain.to(torch.float64)
 
             idxs =  batch.new_edges_not_shifted.T[0,:] # idxs of sampling points (for each batch between 0 and data.num_domain_sampling_points)
             new_idxs = torch.clone(idxs)
@@ -950,10 +992,23 @@ class PINN(nn.Module):
                 print(f"normalization_const (in loss) - {tmp} NaNs")
 
             if output_sampled_domain.shape[1] <= 3:
-                gt_in_sampled = torch.stack((x_vel, y_vel, press), dim=1)/normalization_const.view(-1,1)
+                sampled_labels = (x_vel, y_vel, press)
             else:
-                gt_in_sampled = torch.stack((x_vel, y_vel, press, k_turb, w_turb), dim=1)/normalization_const.view(-1,1)
+                sampled_labels = (x_vel, y_vel, press, k_turb, w_turb)
+            gt_in_sampled = torch.stack(sampled_labels, dim=1)/normalization_const.view(-1,1)
 
+            if self.conf.get("output_turbulence", False) and self.conf.get("supervise_nu_t", False):
+                nu_t_pred = denormalize_label(output_sampled_domain[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
+                            denormalize_label(output_sampled_domain[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
+                nu_t_pred_norm = normalize_label(nu_t_pred, "nu_t", self.conf)
+                output_sampled_domain = torch.cat((output_sampled_domain, nu_t_pred_norm.view(-1,1)), dim=1)
+                
+                nu_t_label = denormalize_label(gt_in_sampled[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
+                        denormalize_label(gt_in_sampled[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
+                nu_t_label_norm = normalize_label(nu_t_label, "nu_t", self.conf)
+                gt_in_sampled = torch.cat((gt_in_sampled, nu_t_label_norm.view(-1,1)), dim=1)
+
+            loss_dict.update({"supervised_on_sampled": self.net.loss(output_sampled_domain, gt_in_sampled, ptr_num_sampled).to(torch.float32)})
             # i=0   # 0,1,2,3,4
             # pl = plot_PYVISTA(data.domain_sampling_points, gt_in_sampled[:,i], data.pos[:,:2], data.y[:,i])
             # pl = plot_PYVISTA(data.pos[:,:2], data.y[:,0])
@@ -965,13 +1020,24 @@ class PINN(nn.Module):
             # y_vel = torch.ones(n, device=device).scatter_reduce_(0, idxs, label[faces][:,1], "mean", include_self=False)
             # press = torch.ones(n, device=device).scatter_reduce_(0, idxs, label[faces][:,2], "mean", include_self=False)
             # gt_in_sampled = torch.stack((x_vel, y_vel, press), dim=1)
-            loss_dict.update({"supervised_on_sampled": self.net.loss(output_sampled_domain, gt_in_sampled, ptr_num_sampled)})
         
         ### CAN CHOOSE TO ONLY SUPERVISE IN SAMPLED POINTS (but then you have no supervision on mesh points,
         ###     so it doesn't work very well)
-        loss_dict.update({"supervised": self.net.loss(out_supervised, label, ptr=batch.ptr)})
-        # else:
-        #     loss_dict.update({"supervised": self.net.loss(out_supervised, label)})
+        if not (self.conf.get("supervise_nu_t", False) and self.conf.get("output_turbulence", False)):
+            loss_dict.update({"supervised": self.net.loss(out_supervised, label, ptr=batch.ptr).to(torch.float32)})
+        else:
+            pred_nu_t = denormalize_label(out_supervised[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
+                denormalize_label(out_supervised[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
+            pred_nu_t_norm = normalize_label(pred_nu_t, "nu_t", self.conf)
+            extended_pred = torch.cat((out_supervised, pred_nu_t_norm.view(-1,1)), dim=1)
+
+            label_nu_t = denormalize_label(label[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
+                denormalize_label(label[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
+            label_nu_t_norm = normalize_label(label_nu_t, "nu_t", self.conf)
+            extended_label = torch.cat((label, label_nu_t_norm.view(-1,1)), dim=1)
+
+            loss_dict.update({"supervised": self.net.loss(extended_pred, extended_label, ptr=batch.ptr).to(torch.float32)})
+
 
         def get_values_per_sample(sample_residuals, additional_boundary=None):
             loss_fn = lambda x: x.abs().mean() if self.conf.residual_loss == "MAE" else x.square().mean()
@@ -1056,7 +1122,6 @@ class PINN(nn.Module):
                     pred_coefficients, debug_values = get_coefficients(self.conf, data, pred_supervised_pts_pressure, 
                         velocity_derivatives=pred_vel_derivatives, turbulent_values=pred_turb_values, 
                         denormalize=True, from_boundary_sampling=True)
-                    
 
                     if self.conf.get("use_shear_loss", False):
                         aero_loss["main_shear"] = aero_loss.get("main_shear", 0) \
@@ -1064,7 +1129,6 @@ class PINN(nn.Module):
                         if self.conf.get("use_second_flap_loss", False):
                             aero_loss["flap_shear"] = aero_loss.get("flap_shear", 0) \
                             + self.net.loss(pred_coefficients["second_flap"][1], data.components_coefficients["second_flap"][1])
-
                 else:
                     pred_coefficients, debug_values = get_coefficients(self.conf, data, pred_supervised_pts_pressure, denormalize=True)
                 
@@ -1081,7 +1145,6 @@ class PINN(nn.Module):
             
             optional_values.update({f"boundary_debug_vals_{k}": cum_debug_values[k] for k in cum_debug_values})
             loss_dict.update({f"aero_loss_{k}": aero_loss[k] for k in aero_loss})
-
 
         if self.conf.get("normalize_denormalized_loss_components", False):
             supervised_value_lb = loss_dict["supervised"].item() * self.conf.get("minimum_continuity_relative_weight", 0)
@@ -1109,7 +1172,6 @@ class PINN(nn.Module):
                     loss_dict["aero_loss_main_shear"] = (supervised_value_lb) * tmp / tmp.item()
                 elif tmp > supervised_value_ub:
                     loss_dict["aero_loss_main_shear"] = (supervised_value_ub) * tmp / tmp.item()
-
 
         loss_dict = {k:v/batch_size for k,v in loss_dict.items()}
         optional_values = {k:v/batch_size for k,v in optional_values.items()}

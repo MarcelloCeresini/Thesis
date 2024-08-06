@@ -5,7 +5,7 @@ import torch_geometric.data as pyg_data
 from torch import vmap
 import numpy as np
 import wandb
-from utils import normalize_label
+from utils import normalize_label, denormalize_label
 
 class NormalizeLabels(BaseTransform):
     def __init__(self, labels_to_keep_for_training, label_normalization_mode, dict_labels_train, air_speed, Q) -> None:
@@ -17,9 +17,18 @@ class NormalizeLabels(BaseTransform):
         self.Q = Q
 
     def forward(self, data: torch.Any) -> torch.Any:
+        data.y = data.y.to(torch.float64)
         for i, (values, label) in enumerate(zip(data.y.T, self.labels_to_keep_for_training)):
-            data.y[:,i] = normalize_label(values, label, 
-                self.label_normalization_mode, self.dict_labels_train, self.air_speed, self.Q)
+            kwargs = {
+                "label_normalization_mode":self.label_normalization_mode, 
+                "dict_labels_train":self.dict_labels_train, 
+                "air_speed":self.air_speed, 
+                "Q":self.Q}
+            # values = values.to(torch.float64)
+            tmp = normalize_label(values, label, **kwargs)
+            tmp2 = denormalize_label(tmp, label, **kwargs)
+            assert torch.allclose(values, tmp2)
+            data.y[:,i] = tmp
         return data
 
 

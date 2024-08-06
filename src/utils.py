@@ -500,44 +500,89 @@ def normalize_features(features, conf):
             raise NotImplementedError("Only implemented 'None' and 'Physical'")
 
 
-def normalize_label(values, label, label_normalization_mode, dict_labels_train, air_speed, Q):
+# def normalize_label(values, label, label_normalization_mode, dict_labels_train, air_speed, Q):
 
-    # TODO: maybe add a graph-wise norm?
+#     # TODO: maybe add a graph-wise norm?
+#     match label_normalization_mode[label]["main"]:
+#         case "physical":
+#             if label in ["x-velocity", "y-velocity"]:
+#                 tmp = values / air_speed
+#             elif label == "pressure":
+#                 tmp = values / Q #1/2 * rho * v**2
+#             else:
+#                 raise ValueError(f"Physical normalization no available for {label}")
+#         case "max-normalization":
+#             if (label in ["x-velocity", "y-velocity"]) and \
+#                     label_normalization_mode[label].get("magnitude", False):
+#                 tmp = values / dict_labels_train["max_magnitude"]["v_mag"]
+#             else:
+#                 tmp = values / dict_labels_train["max_magnitude"][label]
+
+#         case "standardization":
+#             if (label in ["x-velocity", "y-velocity"]) and \
+#                     label_normalization_mode[label].get("magnitude", False):
+#                 tmp = (values-dict_labels_train["mean"]["v_mag"])/ \
+#                     dict_labels_train["std"]["v_mag"]
+#             else:
+#                 tmp = (values-dict_labels_train["mean"][label])/ \
+#                     dict_labels_train["std"][label]
+#         case _:
+#             raise NotImplementedError()
+    
+#     return tmp
+
+def normalize_label(values, label, conf=None, **kwargs):
+    if conf is None:
+        conf = {
+            "Q": kwargs["Q"],
+            "air_speed": kwargs["air_speed"]
+        }
+        label_normalization_mode = kwargs["label_normalization_mode"]
+        dict_labels_train = kwargs["dict_labels_train"]
+    else:
+        label_normalization_mode = conf["label_normalization_mode"]
+        dict_labels_train = conf["dict_labels_train"]
+
     match label_normalization_mode[label]["main"]:
         case "physical":
             if label in ["x-velocity", "y-velocity"]:
-                tmp = values / air_speed
+                new_values = values / conf["air_speed"]
             elif label == "pressure":
-                tmp = values / Q #1/2 * rho * v**2
+                new_values = values / conf["Q"]
             else:
                 raise ValueError(f"Physical normalization no available for {label}")
         case "max-normalization":
             if (label in ["x-velocity", "y-velocity"]) and \
                     label_normalization_mode[label].get("magnitude", False):
-                tmp = values / dict_labels_train["max_magnitude"]["v_mag"]
+                new_values = values / dict_labels_train["max_magnitude"]["v_mag"]
             else:
-                tmp = values / dict_labels_train["max_magnitude"][label]
+                new_values = values / dict_labels_train["max_magnitude"][label]
 
         case "standardization":
             if (label in ["x-velocity", "y-velocity"]) and \
                     label_normalization_mode[label].get("magnitude", False):
-                tmp = (values-dict_labels_train["mean"]["v_mag"])/ \
+                new_values = (values-dict_labels_train["mean"]["v_mag"])/ \
                     dict_labels_train["std"]["v_mag"]
             else:
-                tmp = (values-dict_labels_train["mean"][label])/ \
-                    dict_labels_train["std"][label]
+                new_values = (values-dict_labels_train["mean"][label])/\
+                            dict_labels_train["std"][label]
         case _:
             raise NotImplementedError()
-    
-    return tmp
+        
+    return new_values
 
 
-def denormalize_label(values, label, conf):
-    '''
-    Connected to NormalizeLabels augmentation
-    '''
-    label_normalization_mode = conf["label_normalization_mode"]
-    dict_labels_train = conf["dict_labels_train"] 
+def denormalize_label(values, label, conf=None, **kwargs):
+    if conf is None:
+        conf = {
+            "Q": kwargs["Q"],
+            "air_speed": kwargs["air_speed"]
+        }
+        label_normalization_mode = kwargs["label_normalization_mode"]
+        dict_labels_train = kwargs["dict_labels_train"]
+    else:
+        label_normalization_mode = conf["label_normalization_mode"]
+        dict_labels_train = conf["dict_labels_train"]
 
     match label_normalization_mode[label]["main"]:
         case "physical":
@@ -557,10 +602,10 @@ def denormalize_label(values, label, conf):
         case "standardization":
             if (label in ["x-velocity", "y-velocity"]) and \
                     label_normalization_mode[label].get("magnitude", False):
-                new_values = values*dict_labels_train["std"]["v_mag"]+ \
+                new_values = (values*dict_labels_train["std"]["v_mag"])+ \
                             dict_labels_train["mean"]["v_mag"]
             else:
-                new_values = values*dict_labels_train["std"][label]+\
+                new_values = (values*dict_labels_train["std"][label])+\
                             dict_labels_train["mean"][label]
         case _:
             raise NotImplementedError()

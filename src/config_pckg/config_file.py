@@ -36,6 +36,7 @@ class Config():
             self.new_home = os.path.join("/gpfs", "prj", "cfd", "CFD-RD_SOLVER", "marcello")
             self.wandb_communication_dir = os.path.join("/gpfs", "prj", "cfd", "CFD-RD_SOLVER", "marcello", ".wandb_communication_dir")
             self.parallel_dynamic_weights = True
+            self.CLUSTER = True
 
             import resource
             rlimit = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -260,8 +261,9 @@ class Config():
                 "magnitude": True,
             },
             "pressure": {"main": "physical",},
-            "turb-diss-rate": {"main": "max-normalization",},
-            "turb-kinetic-energy": {"main": "max-normalization"},
+            "turb-kinetic-energy": {"main": "standardization"},
+            "turb-diss-rate": {"main":"standardization",},
+            "nu_t": {"main": "standardization"},
         }
 
         self.w_min_for_clamp = 1e-6
@@ -311,9 +313,13 @@ class Config():
         
         self.bool_algebraic_continuity = True
         self.bool_aero_loss: bool = True
-        self.use_shear_loss: bool = False # DO NOT USE, it's broken
+        self.use_shear_loss: bool = False # DO NOT USE, it's unstable
         self.use_second_flap_loss: bool = True
         self.output_turbulence: bool = True
+        self.multimodal_turbolence = False
+        self.multimodal_beta_a = 10 # woth 10: 0.6 --> 0.81, 0.7 --> 0.97
+        self.supervise_nu_t = True
+
         if self.PINN_mode == "turbulent_kw" and not self.output_turbulence:
             print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
             self.output_turbulence = True
@@ -321,6 +327,10 @@ class Config():
         if self.output_turbulence:
             self.labels_to_keep_for_training += self.labels_to_keep_for_training_turbulence
         self.output_dim = len(self.labels_to_keep_for_training)
+
+        if self.multimodal_turbolence:
+            assert self.output_turbulence, "Cannot have multimodal turbolence without turbolence"
+            self.output_dim += 1
 
         self.activation_for_max_normalized_features = False
         if self.activation_for_max_normalized_features:
@@ -359,7 +369,7 @@ class Config():
         
         self.n_sampled_new_edges = 3
 
-        self.residual_loss: Literal["MSE", "MAE"] = "MSE"
+        self.residual_loss: Literal["MSE", "MAE"] = "MAE"
 
         self.standard_weights = {
             "supervised": 1,
@@ -398,7 +408,7 @@ class Config():
         self.lambda_dynamic_weights_for_denormalized = 0.00001 # (0.1 in NSFnets arXiv:2003.06496v1)
         self.gamma_loss = 10
 
-        self.divide_omega_final_value = 100.
+        self.divide_omega_final_value = False # Set to false if not wanted
         self.gradient_clip_value = 1
         self.gradient_clip_value_norm = 1 # ~ initial norm in a training
         self.maximum_grad_value = 0.01 # after lr
