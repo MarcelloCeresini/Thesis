@@ -1193,6 +1193,7 @@ class MeshCompleteInfo:
                 run_name: Optional[str] = None,
                 return_meshes: Optional[bool] = None,
                 conf = None,
+                plot_boundary_group = None,
                 ):
         '''
         what_to_plot whould be a list of tuples (tup[0], tup[1], tup[2]):
@@ -1205,8 +1206,8 @@ class MeshCompleteInfo:
                 - if tup[1] is feature, a key of conf.graph_node_feature_dict
                 - additional special value "streamlines" in case --> ("cell", "label", "velocity") --> automatically add streamlines
         '''
-        assert self.conf["dim"] == 2, "Implement dim = 3"
-        assert (what_to_plot is not None) or (labels is not None) or (return_meshes is not None), "Nothing to plot specified"
+        assert self.conf.dim == 2, "Implement dim = 3"
+        assert (what_to_plot is not None) or (labels is not None) or (return_meshes is not None) or (plot_boundary_group is not None), "Nothing to plot specified"
         # TODO: should we create permanent objects to avoid recomputation?
 
         if self.vertex_labels is not None:
@@ -1252,6 +1253,52 @@ class MeshCompleteInfo:
                 tmp.append(cell_pyv_mesh)
             return tmp
 
+
+        if plot_boundary_group is not None:
+            if plot_boundary_group:
+                # Define the colors we want to use
+                from matplotlib.colors import ListedColormap
+                blue = np.array([12 / 256, 238 / 256, 246 / 256, 1.0])
+                black = np.array([11 / 256, 11 / 256, 11 / 256, 1.0])
+                grey = np.array([189 / 256, 189 / 256, 189 / 256, 1.0])
+                yellow = np.array([255 / 256, 247 / 256, 0 / 256, 1.0])
+                green = np.array([0.0, 1.0, 0.0, 1.0])
+                red = np.array([1.0, 0.0, 0.0, 1.0])
+                white = np.array([1.0, 1.0, 1.0, 1.0])
+                violet = np.array([127 / 256, 0 / 256, 255 / 256, 1.0])
+
+                mapping = np.linspace(0, 7, 256)
+                newcolors = np.empty((256, 4))
+                newcolors[mapping >= 6.5] = red
+                newcolors[mapping < 6.5] = violet
+                newcolors[mapping < 5.5] = green
+                newcolors[mapping < 4.5] = grey
+                newcolors[mapping < 3.5] = yellow
+                newcolors[mapping < 2.5] = blue
+                newcolors[mapping < 1.5] = black
+                newcolors[mapping < 0.5] = white
+
+                # Make the colormap from the listed colors
+                my_colormap = ListedColormap(newcolors)
+
+                tmp = np.zeros((self.face_center_additional_features.shape[0],)) # interior
+                tmp[np.where(self.face_center_additional_features[:,self.conf.graph_node_features_not_for_training["ground"]])] = 1
+                tmp[np.where(self.face_center_additional_features[:,self.conf.graph_node_features_not_for_training["tyre"]])] = 2
+                tmp[np.where(self.face_center_additional_features[:,self.conf.graph_node_features_not_for_training["main_flap"]])] = 3
+                tmp[np.where(self.face_center_additional_features[:,self.conf.graph_node_features_not_for_training["second_flap"]])] = 4
+                tmp[np.where(self.face_center_additional_features[:,self.conf.graph_node_features_not_for_training["p_outlet"]])] = 5
+                tmp[np.where(self.face_center_additional_features[:,self.conf.graph_node_features_not_for_training["simmetry"]])] = 6
+                tmp[np.where(self.face_center_additional_features[:,self.conf.graph_node_features_not_for_training["v_inlet"]])] = 7
+                
+                face_pyv_mesh.cell_data["categories"] = tmp
+            
+                face_pyv_mesh.plot(scalars="categories", 
+                                   cmap=["w", "b", "g", "r", "c", "m", "k", "y"], 
+                                   lighting=False, 
+                                #    scalar_bar_args="Boundary Condition Type",
+                                   render_lines_as_tubes=True,
+                                   line_width=4)
+                return 0
 
         if labels is not None:
             # columns = self.conf.labels_to_keep_for_training # TODO: update all MeshComplete files from scratch
@@ -1370,7 +1417,7 @@ class MeshCompleteInfo:
                             assert self.face_center_labels is not None, "You did not use 'add_labels' with mode='element' on this mesh, no labels present for faces or cells"
                             face_pyv_mesh.cell_data[tup[2]] = self.face_center_labels[tup[2]]
                         elif tup[1] == "feature":
-                            face_pyv_mesh.cell_data[tup[2]] = self.face_center_features[:,self.conf["graph_node_feature_dict"][tup[2]]]
+                            face_pyv_mesh.cell_data[tup[2]] = self.face_center_features[:,self.conf.graph_node_feature_dict[tup[2]]]
                         else:
                             raise ValueError(f"tup[1] can be only 'label' or 'feature', you wrote {tup[1]}")
                         

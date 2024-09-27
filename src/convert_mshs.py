@@ -13,7 +13,7 @@ import torch
 from scipy.spatial import Delaunay
 
 from config_pckg.config_file import Config
-from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph, get_coefficients
+from utils import convert_msh_to_mesh_complete_info_obj, convert_mesh_complete_info_obj_to_graph, get_coefficients, MeshCompleteInfo
 
 
 def convert_all_msh_to_meshComplete(conf: Config, output_dir: str, input_dir: Optional[str] = None, input_filenames: Optional[list[str]] = None):
@@ -87,9 +87,16 @@ if __name__ == "__main__":
     #     "cd_main_pressure", "cl_main_pressure", "cd_main_total", "cl_main_total",
     #     "cd_tyre_pressure", "cl_tyre_pressure", "cd_tyre_total", "cl_tyre_total"
     # ])
+    
+    dataset_files = sorted(glob.glob(os.path.join(conf.standard_dataset_dir, "*.pt")))
 
-    for i, (path_msh, name, path_m, path_g) in tqdm(enumerate(zip(
-        acceptable_input_filepaths, acceptable_input_filenames, meshComplete_paths, graph_paths)), 
+    n_edges = 0
+    n_nodes = 0
+    n_cells = 0
+    n_boundary = 0
+    
+    for i, (path_msh, name, path_m, path_g, path_dataset_f) in tqdm(enumerate(zip(
+        acceptable_input_filepaths, acceptable_input_filenames, meshComplete_paths, graph_paths, dataset_files)), 
         total=len(meshComplete_paths)):
 
         assert path_g.split(".")[0].split(os.sep)[-1] == path_m.split(".")[0].split(os.sep)[-1]
@@ -97,14 +104,18 @@ if __name__ == "__main__":
         # name_df_entry = name.removeprefix("2dtc_").removesuffix("_001_s01")
         # coeffs = df[df.index == name_df_entry]
 
-
         # if coeffs.shape[0] != 0:
         # meshCI_new = convert_msh_to_mesh_complete_info_obj(conf, path_msh, compute_radial_attributes=False)
         # meshCI_new.add_labels(os.path.join(conf.EXTERNAL_FOLDER_CSV, name+"_cell_values_at300.csv"))
         # meshCI_new.save_to_disk(path_m)
-        # with open(path_m, "rb") as f:
-            # meshCI_old = copy.copy(pickle.load(f))
+        with open(path_m, "rb") as f:
+            meshCI_old = copy.copy(pickle.load(f))
 
+        n_edges += meshCI_old.FcFc_edges.shape[0]
+        n_nodes += meshCI_old.face_areas.shape[0]
+        n_cells += meshCI_old.cell_center_positions.shape[0]
+        n_boundary += meshCI_old.face_center_features_mask[:,-1].sum()
+        pass
         # meshCI_new.radial_attributes = meshCI_old.radial_attributes
         # meshCI_new.face_center_features = np.concatenate((meshCI_new.face_center_features, meshCI_new.radial_attributes), axis=1)
         # meshCI_new.face_center_labels = meshCI_old.face_center_labels
@@ -139,19 +150,36 @@ if __name__ == "__main__":
         # data.components_coefficients = get_coefficients(conf, data, pressure_values=data.y[:,2],
         #     velocity_derivatives=data.y_additional[:,2:], turbulent_values=data.y[:,3:])
         # pass
-        data = copy.copy(torch.load(path_g))
-        omega = data.y[...,4] / (0.09*data.y[...,3])
-        data.y[...,4] = omega
+        # data_graph = copy.copy(torch.load(path_g))
+        # dataset_file = copy.copy(torch.load(path_dataset_f))
+        # print(data_graph.y.mean(dim=0))
+        # print(dataset_file.y.mean(dim=0))
+        # pass
+        # omega = data.y[...,4] / (0.09*data.y[...,3])
+        # data.y[...,4] = omega
         # tmp = [data.CcFc_edges[data.CcFc_edges[:,0]==i,1] for i in range(data.CcFc_edges[:,0].max()+1)]
         # data.faces_in_cell = torch.nn.utils.rnn.pad_sequence(
         #     tmp, 
         #     padding_value=-1
         # ).T
         # data.n_cells = data.len_faces.shape[0]
-        torch.save(data, path_g)
+        # torch.save(data, path_g)
+        # if i > 48:
+        #     with open(path_m, "rb") as f: # 48 double flap
+        #         meshCI: MeshCompleteInfo = copy.copy(pickle.load(f))
+            
+        # # meshCI.plot_mesh(what_to_plot=[("face", "feature", "v_t")], conf=conf)
+        #     if np.where(meshCI.face_center_additional_features[:,meshCI.conf.graph_node_features_not_for_training["second_flap"]])[0].shape[0] > 0:
+        #         meshCI.plot_mesh(plot_boundary_group=True)
+        #         break
     # df_errors.to_csv(os.path.join(conf.DATA_DIR, "relative_errors.csv"))
 
     print("REMEMBER TO COPY IT TO THE PC FOLDER")
+    
+    print(f"Edges {n_edges / i}")
+    print(f"Nodes {n_nodes / i}")
+    print(f"Cells {n_cells / i}")
+    print(f"B faces {n_boundary / i}")
 
 
 def initial_trial():

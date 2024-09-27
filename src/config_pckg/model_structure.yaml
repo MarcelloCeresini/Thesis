@@ -4,15 +4,15 @@ PINN: True
 add_self_loops: False
 update_edges: True
 edges_channels: 4
-use_positional_features: True
+# use_positional_features: True
 
-positional_encoder:
-  type: sequential_model
-  layers: 
-    # - {type: layer, name: Linear, out_features: 32}
-    # - {type: layer, name: Softplus}
-    # - {type: layer, name: Linear, out_features: 64}
-    # - {type: layer, name: Softplus}
+# positional_encoder:
+#   type: sequential_model
+#   layers: 
+#     # - {type: layer, name: Linear, out_features: 32}
+#     # - {type: layer, name: Softplus}
+#     # - {type: layer, name: Linear, out_features: 64}
+#     # - {type: layer, name: Softplus}
 
 encoder:
   type: sequential_model

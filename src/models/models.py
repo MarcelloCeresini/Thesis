@@ -749,10 +749,12 @@ class PINN(nn.Module):
                         residuals["negative_k"] = torch.clamp_max(k, 0.)
                         residuals["negative_w"] = torch.clamp_max(w, 0.)
 
-                    k = torch.clamp_min(k, 0.)
                     # reference for the clipping https://doi.org/10.2514/1.36541
                     tmp = self.conf.C_lim_w*torch.sqrt((2*u_x**2 + (u_y+v_x)**2 + 2*v_y**2)/self.conf.beta_star_w)
-                    w = torch.maximum(w, tmp) # avoids small omega
+
+                    if not self.conf.get("mask_non_physical_turb", False):
+                        k = torch.clamp_min(k, 0.)
+                        w = torch.maximum(w, tmp) # avoids small omega
                     
                     turbolent_residuals = {
                         "continuity": (u_x + v_y)*self.conf.air_density,
@@ -762,6 +764,10 @@ class PINN(nn.Module):
                         "momentum_y": u*v_x + v*v_y + p_y/self.conf.air_density
                                         - (self.conf.air_kinematic_viscosity + k/w)*(v_xx + v_yy)
                                         - ((k_x*w - k*w_x) * v_x + (k_y*w - k*w_y) * v_y) / w**2,}
+                    
+                    if not self.conf.get("mask_non_physical_turb", False):
+                        turbolent_residuals["momentum_x"] = turbolent_residuals["momentum_x"] * (k>0.) * (w>tmp)
+                        turbolent_residuals["momentum_y"] = turbolent_residuals["momentum_y"] * (k>0.) * (w>tmp)
                     
                     if turbolence_mask is None:
                         residuals.update(turbolent_residuals)
@@ -998,15 +1004,17 @@ class PINN(nn.Module):
             gt_in_sampled = torch.stack(sampled_labels, dim=1)/normalization_const.view(-1,1)
 
             if self.conf.get("output_turbulence", False) and self.conf.get("supervise_nu_t", False):
-                nu_t_pred = denormalize_label(output_sampled_domain[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
-                            denormalize_label(output_sampled_domain[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
+                nu_t_pred = domain_quantities["k"] / domain_quantities["w"]
                 nu_t_pred_norm = normalize_label(nu_t_pred, "nu_t", self.conf)
                 output_sampled_domain = torch.cat((output_sampled_domain, nu_t_pred_norm.view(-1,1)), dim=1)
                 
-                nu_t_label = denormalize_label(gt_in_sampled[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
-                        denormalize_label(gt_in_sampled[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
+                nu_t_label = denormalize_label(gt_in_sampled[...,3], "turb-kinetic-energy", self.conf)/ \
+                        denormalize_label(gt_in_sampled[...,4], "turb-diss-rate", self.conf)
                 nu_t_label_norm = normalize_label(nu_t_label, "nu_t", self.conf)
                 gt_in_sampled = torch.cat((gt_in_sampled, nu_t_label_norm.view(-1,1)), dim=1)
+                
+                nu_t_re_complete = nu_t_pred/nu_t_label
+                
 
             loss_dict.update({"supervised_on_sampled": self.net.loss(output_sampled_domain, gt_in_sampled, ptr_num_sampled).to(torch.float32)})
             # i=0   # 0,1,2,3,4
@@ -1023,20 +1031,20 @@ class PINN(nn.Module):
         
         ### CAN CHOOSE TO ONLY SUPERVISE IN SAMPLED POINTS (but then you have no supervision on mesh points,
         ###     so it doesn't work very well)
-        if not (self.conf.get("supervise_nu_t", False) and self.conf.get("output_turbulence", False)):
-            loss_dict.update({"supervised": self.net.loss(out_supervised, label, ptr=batch.ptr).to(torch.float32)})
-        else:
-            pred_nu_t = denormalize_label(out_supervised[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
-                denormalize_label(out_supervised[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
-            pred_nu_t_norm = normalize_label(pred_nu_t, "nu_t", self.conf)
-            extended_pred = torch.cat((out_supervised, pred_nu_t_norm.view(-1,1)), dim=1)
+        # if not (self.conf.get("supervise_nu_t", False) and self.conf.get("output_turbulence", False)):
+        loss_dict.update({"supervised": self.net.loss(out_supervised, label, ptr=batch.ptr).to(torch.float32)})
+        # else:
+        #     pred_nu_t = denormalize_label(out_supervised[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
+        #         denormalize_label(out_supervised[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
+        #     pred_nu_t_norm = normalize_label(pred_nu_t, "nu_t", self.conf)
+        #     extended_pred = torch.cat((out_supervised, pred_nu_t_norm.view(-1,1)), dim=1)
 
-            label_nu_t = denormalize_label(label[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
-                denormalize_label(label[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
-            label_nu_t_norm = normalize_label(label_nu_t, "nu_t", self.conf)
-            extended_label = torch.cat((label, label_nu_t_norm.view(-1,1)), dim=1)
+        #     label_nu_t = denormalize_label(label[...,3], "turb-kinetic-energy", self.conf).clamp_min(0)/ \
+        #         denormalize_label(label[...,4], "turb-diss-rate", self.conf).clamp_min(1e-3)
+        #     label_nu_t_norm = normalize_label(label_nu_t, "nu_t", self.conf)
+        #     extended_label = torch.cat((label, label_nu_t_norm.view(-1,1)), dim=1)
 
-            loss_dict.update({"supervised": self.net.loss(extended_pred, extended_label, ptr=batch.ptr).to(torch.float32)})
+        #     loss_dict.update({"supervised": self.net.loss(extended_pred, extended_label, ptr=batch.ptr).to(torch.float32)})
 
 
         def get_values_per_sample(sample_residuals, additional_boundary=None):
@@ -1086,10 +1094,22 @@ class PINN(nn.Module):
                 else: # boundary sampling
                     sample_residuals[k] = residuals[k][ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]]
             
+            # if self.conf.get("output_turbulence", False) and self.conf.get("supervise_nu_t", False):
+            #     nu_t_re = nu_t_re_complete[ptr_num_sampled[i]:ptr_num_sampled[i+1]]
+            #     sample_residuals["momentum_x"] = torch.where(
+            #         torch.logical_and(0.1<nu_t_re, nu_t_re<10.), 
+            #         sample_residuals["momentum_x"], 
+            #         torch.zeros_like(sample_residuals["momentum_x"]))
+            #     sample_residuals["momentum_y"] = torch.where(
+            #         torch.logical_and(0.1<nu_t_re, nu_t_re<10.), 
+            #         sample_residuals["momentum_y"], 
+            #         torch.zeros_like(sample_residuals["momentum_y"]))
+            
             if x_additional_boundary is not None:
                 x_additional_boundary_sliced = x_additional_boundary[ptr_num_sampled_BC[i]:ptr_num_sampled_BC[i+1]]
             else:
                 x_additional_boundary_sliced = None
+            
             
             sample_loss_dict, sample_optional_values = get_values_per_sample(
                 sample_residuals, x_additional_boundary_sliced)

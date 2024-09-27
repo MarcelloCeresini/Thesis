@@ -268,7 +268,6 @@ class Config():
 
         self.w_min_for_clamp = 1e-6
 
-        # TODO: compute and fill these values (maybe in a file?)
         with open(os.path.join(self.ROOT_DIR, "src", "config_pckg", "dataset_label_stats.pkl"), "rb") as f:
             dataset_label_stats = pickle.load(f)
         
@@ -312,13 +311,14 @@ class Config():
             = "turbulent_kw"
         
         self.bool_algebraic_continuity = True
-        self.bool_aero_loss: bool = True
+        self.bool_aero_loss: bool = False
         self.use_shear_loss: bool = False # DO NOT USE, it's unstable
-        self.use_second_flap_loss: bool = True
+        self.use_second_flap_loss: bool = False
         self.output_turbulence: bool = True
         self.multimodal_turbolence = False
         self.multimodal_beta_a = 10 # woth 10: 0.6 --> 0.81, 0.7 --> 0.97
-        self.supervise_nu_t = True
+        self.supervise_nu_t = False
+        self.mask_non_physical_turb = True
 
         if self.PINN_mode == "turbulent_kw" and not self.output_turbulence:
             print("Cannot compute momentum residuals without turbolence, setting output_turbulence=True")
@@ -375,9 +375,9 @@ class Config():
             "supervised": 1,
             "supervised_on_sampled": 1,
             "boundary": 1,
-            "continuity": 1,
+            "continuity": 10,
             "momentum_x": 1,
-            "algebraic_continuity": 1,
+            "algebraic_continuity": 1e4,
             "aero_loss_main_pressure": 1,
             "aero_loss_main_shear": 1,
         }
@@ -385,7 +385,7 @@ class Config():
         self.standard_weights["aero_loss_flap_pressure"] = self.standard_weights["aero_loss_main_pressure"]
         self.standard_weights["aero_loss_flap_shear"] = self.standard_weights["aero_loss_main_shear"]
 
-        self.physical_constraint_loss = True
+        self.physical_constraint_loss = False
         if self.physical_constraint_loss:
             self.standard_weights.update({
                 "negative_k": 1,
@@ -400,7 +400,7 @@ class Config():
         self.minimum_shear_relative_weight = 0.1
         self.maximum_shear_relative_weight = 10
 
-        self.dynamic_loss_weights = True
+        self.dynamic_loss_weights = False
         # self.main_loss_component_dynamic = "supervised" #"supervised_on_sampled"
         self.main_loss_component_dynamic = "supervised"
         # https://iopscience.iop.org/article/10.1088/2399-6528/ace416/pdf
