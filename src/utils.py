@@ -1,4 +1,5 @@
 import copy
+import gc
 import os
 import pickle
 import sys
@@ -627,6 +628,11 @@ def plot_gt_pred_label_comparison(data: Data, model_output, conf, run_name: Opti
     meshCI.set_conf(conf)
     # meshCI.plot_mesh(labels=pred, run_name = run_name, conf=conf)
     meshCI.plot_all_results(data, (pred, model_output[1]), run_name = run_name, conf=conf)
+    
+    meshCI = None
+    pred_labels = None
+    pred = None
+    gc.collect()
 
 
 def get_inward_normal_areas(
@@ -1508,7 +1514,7 @@ class MeshCompleteInfo:
         )
 
         self.faces_in_cells = pd.DataFrame(data=self.CcFc_edges, columns=["cell_idx", "face_idx"]).groupby("cell_idx")["face_idx"].apply(list)
-        # TODO: improve from mean to weighted avg depending on distance
+
         self.cell_center_labels = pd.DataFrame(
             [np.mean(self.face_center_labels.iloc[faces_idx], axis=0) for faces_idx in self.faces_in_cells]
         )
@@ -1528,34 +1534,6 @@ class MeshCompleteInfo:
             face_pyv_mesh.cell_data[lab+"_pred"] = face_pred_labels[lab]
             face_pyv_mesh.cell_data[lab+"_diff"] = self.face_center_labels[lab].reset_index(drop=True) - face_pred_labels[lab]
 
-        off_screen = True
-        pl = pyvista.Plotter(shape=(3, len(columns)), off_screen=off_screen)
-        for i, lab in enumerate(columns):
-            pl.subplot(0,i)
-            pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab, 
-                lighting=False, 
-                scalar_bar_args={"title":f"GT_{lab}"},
-                cmap="Spectral",
-                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
-            pl.camera_position = "xy"
-
-            pl.subplot(1,i)
-            pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_pred", 
-                lighting=False, 
-                scalar_bar_args={"title":f"PRED_{lab}"}, 
-                cmap="Spectral",
-                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
-            pl.camera_position = "xy"
-
-            pl.subplot(2,i)
-            pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_diff", 
-                lighting=False, 
-                scalar_bar_args={"title":f"DIFF_{lab}"}, 
-                cmap="Spectral",
-                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
-            pl.camera_position = "xy"
-        pl.link_views()
-
         if not os.path.isdir(self.conf["test_htmls_comparisons"]):
             os.mkdir(self.conf["test_htmls_comparisons"])
         if not os.path.isdir(self.conf["test_imgs_comparisons"]):
@@ -1570,15 +1548,46 @@ class MeshCompleteInfo:
         if not os.path.isdir(os.path.join(self.conf["test_vtk_comparisons"], run_name)):
             os.mkdir(os.path.join(self.conf["test_vtk_comparisons"], run_name))
 
-        pl.camera.zoom(1.6)
-        pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_cell.html"))
-        pl.screenshot(
-            filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_cell.png"),
-            window_size=(1920,1200))
-
-        pl = pyvista.Plotter(shape=(3, len(columns)), off_screen=off_screen)
+        off_screen = True
         for i, lab in enumerate(columns):
-            pl.subplot(0,i)
+            pl = pyvista.Plotter(shape=(3, 1), off_screen=off_screen)
+            pl.subplot(0,0)
+            pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab, 
+                lighting=False, 
+                scalar_bar_args={"title":f"GT_{lab}"},
+                cmap="Spectral",
+                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
+            pl.camera_position = "xy"
+
+            pl.subplot(1,0)
+            pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_pred", 
+                lighting=False, 
+                scalar_bar_args={"title":f"PRED_{lab}"}, 
+                cmap="Spectral",
+                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
+            pl.camera_position = "xy"
+
+            pl.subplot(2,0)
+            pl.add_mesh(cell_pyv_mesh.copy(), scalars=lab+"_diff", 
+                lighting=False, 
+                scalar_bar_args={"title":f"DIFF_{lab}"}, 
+                cmap="Spectral",
+                clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
+            pl.camera_position = "xy"
+            pl.link_views()
+
+            pl.camera.zoom(2.5)
+            # pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_cell.html"))
+            pl.screenshot(
+                filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, f"{self.name}_{lab}_cell.png"),
+                window_size=(1920,2100))
+            
+            pl = None
+            gc.collect()
+
+        for i, lab in enumerate(columns):
+            pl = pyvista.Plotter(shape=(3, 1), off_screen=off_screen)
+            pl.subplot(0,0)
             pl.add_mesh(face_pyv_mesh.copy(), scalars=lab, 
                 lighting=False, 
                 scalar_bar_args={"title":f"GT_{lab}"},
@@ -1586,7 +1595,7 @@ class MeshCompleteInfo:
                 clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
             pl.camera_position = "xy"
 
-            pl.subplot(1,i)
+            pl.subplot(1,0)
             pl.add_mesh(face_pyv_mesh.copy(), scalars=lab+"_pred", 
                 lighting=False, 
                 scalar_bar_args={"title":f"PRED_{lab}"}, 
@@ -1594,7 +1603,7 @@ class MeshCompleteInfo:
                 clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
             pl.camera_position = "xy"
 
-            pl.subplot(2,i)
+            pl.subplot(2,0)
             pl.add_mesh(face_pyv_mesh.copy(), scalars=lab+"_diff", 
                 lighting=False, 
                 scalar_bar_args={"title":f"DIFF_{lab}"}, 
@@ -1602,12 +1611,15 @@ class MeshCompleteInfo:
                 clim=[conf.dict_labels_train["min"][lab],conf.dict_labels_train["max"][lab]])
             pl.camera_position = "xy"
 
-        pl.link_views()
-        pl.camera.zoom(1.6)
-        pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_face.html"))
-        pl.screenshot(
-            filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_face.png"),
-            window_size=(1920,1200))
+            pl.link_views()
+            pl.camera.zoom(2.5)
+            # pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_face.html"))
+            pl.screenshot(
+                filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, f"{self.name}_{lab}_face.png"),
+                window_size=(1920,2100))
+            
+            pl = None
+            gc.collect()
 
         ### residuals on boundaries
         flag_boundaries = False
@@ -1657,10 +1669,13 @@ class MeshCompleteInfo:
             pl.link_views()
 
             pl.camera.zoom(1.6)
-            pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_boundaries.html"))
+            # pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_boundaries.html"))
             pl.screenshot(
                 filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_boundaries.png"),
                 window_size=(1920,1200))
+            
+            pl = None
+            gc.collect()
         
         ### residuals on domain 
         # # change this
@@ -1680,23 +1695,38 @@ class MeshCompleteInfo:
 
         if len(present_residuals_domain) > 0:
             cmap = "cool"
-            pl = pyvista.Plotter(shape=(1, len(present_residuals_domain)), off_screen=off_screen)
-            
             for i, k in enumerate(present_residuals_domain):
-                pl.subplot(0,i)
+                pl = pyvista.Plotter(shape=(1, 1), off_screen=off_screen)
+                pl.subplot(0,0)
                 pl.add_mesh(cell_pyv_mesh.copy(), lighting=False, cmap=cmap, 
                             scalars=k, scalar_bar_args={"title":f"Domain residual: {k}"},)
                 pl.camera_position = "xy"
 
-            pl.link_views()
-            pl.camera.zoom(1.6)
-            pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_domain_res.html"))
-            pl.screenshot(
-                filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, self.name+"_domain_res.png"),
-                window_size=(1920,1200))
+                pl.link_views()
+                pl.camera.zoom(1.6)
+            # pl.export_html(os.path.join(self.conf["test_htmls_comparisons"], run_name, self.name+"_domain_res.html"))
+                pl.screenshot(
+                    filename=os.path.join(self.conf["test_imgs_comparisons"], run_name, f"{self.name}_{k}_domain_res.png"),
+                    window_size=(1920,1200))
+        
+                pl = None
+                gc.collect()
         
         cell_pyv_mesh.save(os.path.join(self.conf["test_vtk_comparisons"], run_name, self.name+"_cell.vtk"))
         face_pyv_mesh.save(os.path.join(self.conf["test_vtk_comparisons"], run_name, self.name+"_face.vtk"))
+        
+        cell_pyv_mesh = None
+        face_pyv_mesh = None
+        face_list_for_pyvista = None
+        facetype_list_for_pyvista = None
+        cell_list_for_pyvista = None
+        celltype_list_for_pyvista = None
+        face_pred_labels = None
+        cell_pred_lables = None
+        pl = None
+        tmp_idx = None
+        gc.collect()
+
 
 def print_memory_state_gpu(text, conf):
     if conf.device == "cuda":
@@ -1895,29 +1925,33 @@ def convert_mesh_complete_info_obj_to_graph(
 
 def plot_test_images_from_model(conf, model, run_name, test_dataloader):
 
-    for batch in tqdm(test_dataloader):
-        y = model(**get_input_to_model(batch))
+    for j, batch in tqdm(enumerate(test_dataloader)):
+        if j in [0, 1, 6, 7]:
+            y = model(**get_input_to_model(batch))
 
-        # if isinstance(pred_batch, tuple):
-        #     residuals = pred_batch[1]
-        #     pred_batch = pred_batch[0]
+            # if isinstance(pred_batch, tuple):
+            #     residuals = pred_batch[1]
+            #     pred_batch = pred_batch[0]
 
-        for i in range(len(batch)):
-            data = batch[i]
-            assert batch.ptr.shape[0]==2, "Can only print if batch is one"
-            plot_gt_pred_label_comparison(data, y, conf, run_name=os.path.basename(run_name))
+            for i in range(len(batch)):
+                assert batch.ptr.shape[0]==2, "Can only print if batch is one"
+                plot_gt_pred_label_comparison(batch[i], y, conf, run_name=os.path.basename(run_name))
 
+                gettrace = getattr(sys, 'gettrace', None)
+                if gettrace is not None:
+                    if gettrace():
+                        print('Hmm, Big Debugger is watching me --> printing only one')
+                        break
+            
             gettrace = getattr(sys, 'gettrace', None)
             if gettrace is not None:
                 if gettrace():
                     print('Hmm, Big Debugger is watching me --> printing only one')
                     break
-        
-        gettrace = getattr(sys, 'gettrace', None)
-        if gettrace is not None:
-            if gettrace():
-                print('Hmm, Big Debugger is watching me --> printing only one')
-                break
+    
+        batch = None
+        y = None
+        gc.collect()
 
 
 

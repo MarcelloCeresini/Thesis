@@ -3,26 +3,15 @@ import wandb, pprint
 api = wandb.Api()
 
 good_runs = [
-    # "2ygcpwue", # lemon-grass-38
-    # "pnyash2s", # magic-oath-39
-    # "ekffajd8", # desert-disco-41
-    # "ywoed45q", # cool-pine-45
-    # "0az598nq", # deep-capybara-49
-    # "1fagc6rx", # brisk-galaxy-50
-    # "htb6vv54", # silver-flower-51
-    # "kylpiqqd", # apricot-deluge-52
-    # "p68fr2sa", # worldy-music-55
-    # "i6a0k4ca", # misty-feather-62
-    # "0egkpy0z", # olive-star-63
-    # "iugv186w", #pious-plant-64
-    # "peh0csfv", # lucky-snow-65
-    # "qqxymndp", # icy-firefly-66
-    # "8tfcp71w", # misty-bird-73
-    
+    #"568h6oc2", "qmzxcn8q", "pe5g6emv", 
+    "hm4nkv8d", 
+    # "zcwgrsl9", 
+    # "fn0w9rb0", 
+    #"ehu8ya0l", "xlqu35is", "p1nbcy4p", "28ig2vzi", "iez5i4fg", "kylpiqqd"
 ]
 
 UPDATE_TEST_VALUES = True
-UPDATE_METRIC_MIN = False
+UPDATE_METRIC_MIN = True
 
 def update_summary(run_id):
     run = api.run(f"marcelloceresini/Thesis/{run_id}")
